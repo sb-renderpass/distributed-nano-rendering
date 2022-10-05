@@ -120,7 +120,7 @@ auto main() -> int
 
 
 	stream_t stream;
-	stream.initialize(config::server_ip, config::server_port, timeout_us);
+	stream.initialize(config::server_ip, config::server_port);
 
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
 
@@ -144,16 +144,15 @@ auto main() -> int
 
 		update_pose(window, pose);
 
-		if (stream_t::stats_t stats;
-			stream.render(pose, frame_buffer.data(), stats) == status_t::success)
+		if (const auto stats = stream.render(pose, frame_buffer.data()); stats)
 		{
 			update_data(frame_buffer_texture, frame_buffer.data());
 
+			constexpr auto target_frame_time = 1.0F / config::target_fps;
 			fmt::print(
 				frame_time <= target_frame_time ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::red),
 				"Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
-				frame_time * 1e3, stats.pose_rtt_ns * 1e-6, stats.render_time_us * 1e-3, stats.stream_time_us * 1e-3);
-
+				frame_time * 1e3, stats->pose_rtt_ns * 1e-6, stats->render_time_us * 1e-3, stats->stream_time_us * 1e-3);
 		}
 
 		glUseProgram(program.handle);
