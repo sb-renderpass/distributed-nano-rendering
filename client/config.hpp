@@ -11,6 +11,7 @@ constexpr auto target_fps		= 30;
 constexpr auto render_scale		= 2;
 
 constexpr auto server_ip		= "192.168.12.180";
+constexpr auto broadcast_ip		= "192.168.12.255";
 constexpr auto server_port		= 3333;
 
 constexpr auto pkt_buffer_size	= 1400;

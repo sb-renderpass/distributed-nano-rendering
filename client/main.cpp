@@ -1,5 +1,6 @@
 #include <array>
 #include <algorithm>
+#include <asm-generic/socket.h>
 #include <cctype>
 #include <cmath>
 #include <chrono>
@@ -22,6 +23,7 @@
 #include "gl.hpp"
 #include "config.hpp"
 #include "shaders.hpp"
+#include "network.hpp"
 
 constexpr auto frame_buffer_width  = config::width;
 constexpr auto frame_buffer_height = config::height;
@@ -30,14 +32,6 @@ constexpr auto slice_buffer_size   = frame_buffer_size / config::num_slices;
 constexpr auto num_pkts_per_slice  = static_cast<int>(std::ceil(static_cast<float>(slice_buffer_size) / config::pkt_buffer_size));
 constexpr auto num_pkts_per_frame  = num_pkts_per_slice * config::num_slices;
 constexpr auto last_seqnum         = num_pkts_per_frame - 1;
-
-struct pose_t
-{
-	uint64_t  timestamp {0};
-	glm::vec2 position  {0, 0};
-	glm::vec2 direction {0, 0};
-	glm::vec2 cam_plane {0, 0};
-};
 
 auto get_timestamp_ns() -> uint64_t
 {
@@ -146,34 +140,11 @@ auto main() -> int
 	GLuint dummy_vao {GL_NONE};
 	glCreateVertexArrays(1, &dummy_vao);
 
-	const auto sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock < 0)
-	{
-		std::cerr << "Failed to create socket!\n";
-		return -1;
-	}
 
+	stream_t stream;
 	constexpr auto target_frame_time = 1.0F / config::target_fps;
-	const timeval recv_timeout { .tv_usec = static_cast<uint64_t>(target_frame_time * 1e6F), };
-	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
-
-	sockaddr_in server_addr;
-	std::memset(&server_addr, 0, sizeof(server_addr));
-	server_addr.sin_family      = AF_INET;
-	server_addr.sin_addr.s_addr = inet_addr(config::server_ip);
-	server_addr.sin_port        = htons(config::server_port);
-
-	sockaddr_in client_addr;
-	std::memset(&client_addr, 0, sizeof(client_addr));
-	client_addr.sin_family      = AF_INET;
-	client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	client_addr.sin_port        = htons(0);
-
-	if (bind(sock, reinterpret_cast<const sockaddr*>(&client_addr), sizeof(client_addr)) < 0)
-	{
-		std::cerr << "Failed to bind socket!\n";
-		return -1;
-	}
+	constexpr auto timeout_us = static_cast<int64_t>(target_frame_time * 1e6F);
+	stream.initialize(config::server_ip, config::server_port, timeout_us);
 
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
 
@@ -197,41 +168,22 @@ auto main() -> int
 
 		update_pose(window, pose);
 
-		if (const auto nbytes = sendto(sock, &pose, sizeof(pose_t), 0, reinterpret_cast<const sockaddr*>(&server_addr), sizeof(server_addr));
-			nbytes < 0)
-		{
-			std::cerr << "Failed to send pose!\n";
-		}
+		stream.send(reinterpret_cast<uint8_t*>(&pose), sizeof(pose));
 
 		auto prev_seqnum = -1;
 		auto pose_rtt_ns = 0;
 
 		while (prev_seqnum < last_seqnum)
 		{
-			if (const auto nbytes = recv(sock, pkt_buffer.data(), pkt_buffer.size(), 0);
-				nbytes < 0)
-			{
-				std::cerr << "Failed to recv frame!\n";
-				break;
-			}
+			if (stream.recv(pkt_buffer.data(), pkt_buffer.size()) < 0) break;
 
-			using header_t = uint32_t;
-			const auto header  = ntohl(*reinterpret_cast<header_t*>(pkt_buffer.data()));
-			const auto padding = (header >> 31) & 0x01;
-			const auto seqnum  = (header >> 24) & 0x7F;
-			const auto offset  = (header >>  0) & 0xFFFFFF;
+			const auto header = get_pkt_header(pkt_buffer.data());
+			const auto [padding, seqnum, offset] = unpack_pkt_header(header);
 
-			struct footer_t
-			{
-				uint32_t render_time_us {0};
-				uint32_t stream_time_us {0};
-				uint64_t timestamp      {0};
-				uint16_t padding_len    {0};
-			} __attribute__((__packed__));
-			const auto footer = *reinterpret_cast<footer_t*>(pkt_buffer.data() + pkt_buffer.size() - sizeof(footer_t));
+			const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
 
-			const auto payload_size = pkt_buffer.size() - sizeof(header_t) - padding * footer.padding_len;
-			std::copy_n(pkt_buffer.data() + sizeof(header_t), payload_size, frame_buffer.data() + offset);
+			const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - padding * footer.padding_len;
+			std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer.data() + offset);
 
 			if (seqnum == last_seqnum)
 			{
@@ -266,8 +218,7 @@ auto main() -> int
 		glfwPollEvents();
 	}
 
-
-	close(sock);
+	stream.shutdown();
 
 	glfwDestroyWindow(window);
 	glfwTerminate();
