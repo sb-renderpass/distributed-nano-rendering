@@ -1,18 +1,10 @@
 #include <array>
 #include <algorithm>
-#include <asm-generic/socket.h>
 #include <cctype>
 #include <cmath>
-#include <chrono>
-#include <cstring>
 #include <iostream>
 #include <numeric>
 #include <deque>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -24,20 +16,6 @@
 #include "config.hpp"
 #include "shaders.hpp"
 #include "network.hpp"
-
-constexpr auto frame_buffer_width  = config::width;
-constexpr auto frame_buffer_height = config::height;
-constexpr auto frame_buffer_size   = frame_buffer_width * frame_buffer_height;
-constexpr auto slice_buffer_size   = frame_buffer_size / config::num_slices;
-constexpr auto num_pkts_per_slice  = static_cast<int>(std::ceil(static_cast<float>(slice_buffer_size) / config::pkt_buffer_size));
-constexpr auto num_pkts_per_frame  = num_pkts_per_slice * config::num_slices;
-constexpr auto last_seqnum         = num_pkts_per_frame - 1;
-
-auto get_timestamp_ns() -> uint64_t
-{
-	return std::chrono::duration_cast<std::chrono::nanoseconds>(
-		std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-}
 
 auto key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
@@ -142,8 +120,6 @@ auto main() -> int
 
 
 	stream_t stream;
-	constexpr auto target_frame_time = 1.0F / config::target_fps;
-	constexpr auto timeout_us = static_cast<int64_t>(target_frame_time * 1e6F);
 	stream.initialize(config::server_ip, config::server_port, timeout_us);
 
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
@@ -168,45 +144,16 @@ auto main() -> int
 
 		update_pose(window, pose);
 
-		stream.send(reinterpret_cast<uint8_t*>(&pose), sizeof(pose));
-
-		auto prev_seqnum = -1;
-		auto pose_rtt_ns = 0;
-
-		while (prev_seqnum < last_seqnum)
+		if (stream_t::stats_t stats;
+			stream.render(pose, frame_buffer.data(), stats) == status_t::success)
 		{
-			if (stream.recv(pkt_buffer.data(), pkt_buffer.size()) < 0) break;
+			update_data(frame_buffer_texture, frame_buffer.data());
 
-			const auto header = get_pkt_header(pkt_buffer.data());
-			const auto [padding, seqnum, offset] = unpack_pkt_header(header);
+			fmt::print(
+				frame_time <= target_frame_time ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::red),
+				"Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
+				frame_time * 1e3, stats.pose_rtt_ns * 1e-6, stats.render_time_us * 1e-3, stats.stream_time_us * 1e-3);
 
-			const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
-
-			const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - padding * footer.padding_len;
-			std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer.data() + offset);
-
-			if (seqnum == last_seqnum)
-			{
-				const auto pose_recv_timestamp = get_timestamp_ns();
-				const auto pose_rtt_ns = pose_recv_timestamp - footer.timestamp;
-				fmt::print(
-					frame_time <= target_frame_time ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::red),
-					"Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
-					frame_time * 1e3, pose_rtt_ns * 1e-6, footer.render_time_us * 1e-3, footer.stream_time_us * 1e-3);
-
-				update_data(frame_buffer_texture, frame_buffer.data());
-			}
-
-			if (seqnum != (prev_seqnum + 1))
-			{
-				fmt::print(fmt::fg(fmt::color::yellow), "JUMP {} => {}\n", prev_seqnum, seqnum);
-			}
-			prev_seqnum = seqnum;
-		}
-
-		if (prev_seqnum < last_seqnum)
-		{
-			fmt::print(fmt::fg(fmt::color::red), "LOST {} => {}\n", prev_seqnum + 1, last_seqnum);
 		}
 
 		glUseProgram(program.handle);

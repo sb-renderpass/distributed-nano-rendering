@@ -1,5 +1,9 @@
 #pragma once
 
+#include <array>
+#include <chrono>
+#include <cctype>
+#include <cmath>
 #include <cstring> // memset
 #include <iostream>
 #include <tuple>
@@ -10,6 +14,32 @@
 #include <unistd.h>
 
 #include "glm/vec2.hpp"
+#include <fmt/core.h>
+#include <fmt/color.h>
+
+#include "config.hpp"
+
+constexpr auto frame_buffer_width  = config::width;
+constexpr auto frame_buffer_height = config::height;
+constexpr auto frame_buffer_size   = frame_buffer_width * frame_buffer_height;
+constexpr auto slice_buffer_size   = frame_buffer_size / config::num_slices;
+constexpr auto num_pkts_per_slice  = static_cast<int>(std::ceil(static_cast<float>(slice_buffer_size) / config::pkt_buffer_size));
+constexpr auto num_pkts_per_frame  = num_pkts_per_slice * config::num_slices;
+constexpr auto last_seqnum         = num_pkts_per_frame - 1;
+constexpr auto target_frame_time   = 1.0F / config::target_fps;
+constexpr auto timeout_us          = static_cast<int64_t>(target_frame_time * 1e6F);
+
+auto get_timestamp_ns() -> uint64_t
+{
+	return std::chrono::duration_cast<std::chrono::nanoseconds>(
+		std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+}
+
+enum class status_t
+{
+	success,
+	failed,
+};
 
 struct pose_t
 {
@@ -50,27 +80,36 @@ auto get_pkt_footer(const uint8_t* buffer, int offset) -> pkt_footer_t
 class stream_t
 {
 public:
-	auto initialize(
-		const char* server_ip, int server_port, int64_t timeout_us) -> int;
+	struct stats_t
+	{
+		uint64_t pose_rtt_ns    {0};
+		uint32_t render_time_us {0};
+		uint32_t stream_time_us {0};
+	};
+
+	auto initialize(const char* server_ip, int server_port, int64_t timeout_us) -> status_t;
 	auto shutdown() -> void;
 
-	auto send(const uint8_t* data, int size) const -> int;
-	auto recv(      uint8_t* data, int size) const -> int;
+	auto render(const pose_t& pose, uint8_t* frame_buffer, stats_t& stats) -> status_t;
 
-//private:
+private:
 	int sock {0};
 	sockaddr_in server_addr;
 	sockaddr_in client_addr;
+
+	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
+
+	auto send(const uint8_t* data, int size) const -> int;
+	auto recv(      uint8_t* data, int size) const -> int;
 };
 
-auto stream_t::initialize(
-	const char* server_ip, int server_port, int64_t timeout_us) -> int
+auto stream_t::initialize(const char* server_ip, int server_port, int64_t timeout_us) -> status_t
 {
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
 	if (sock < 0)
 	{
 		std::cerr << "Failed to create socket!\n";
-		return -1;
+		return status_t::failed;
 	}
 
 	const auto recv_timeout = timeval { .tv_usec = timeout_us, };
@@ -92,16 +131,62 @@ auto stream_t::initialize(
 	if (bind(sock, reinterpret_cast<const sockaddr*>(&client_addr), sizeof(client_addr)) < 0)
 	{
 		std::cerr << "Failed to bind socket!\n";
-		return -1;
+		return status_t::failed;
 	}
 
-	return 0;
+	return status_t::success;
 }
 
 auto stream_t::shutdown() -> void
 {
 	close(sock);
 	sock = 0;
+}
+
+auto stream_t::render(const pose_t& pose, uint8_t* frame_buffer, stats_t& stats) -> status_t
+{
+	send(reinterpret_cast<const uint8_t*>(&pose), sizeof(pose));
+
+	auto prev_seqnum = -1;
+	auto pose_rtt_ns = 0;
+
+	while (prev_seqnum < last_seqnum)
+	{
+		if (recv(pkt_buffer.data(), pkt_buffer.size()) < 0) break;
+
+		const auto header = get_pkt_header(pkt_buffer.data());
+		const auto [padding, seqnum, offset] = unpack_pkt_header(header);
+
+		const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
+
+		const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - padding * footer.padding_len;
+		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer + offset);
+
+		if (seqnum == last_seqnum)
+		{
+			const auto pose_recv_timestamp = get_timestamp_ns();
+			const auto pose_rtt_ns = pose_recv_timestamp - footer.timestamp;
+
+			stats.pose_rtt_ns    = pose_rtt_ns;
+			stats.render_time_us = footer.render_time_us;
+			stats.stream_time_us = footer.stream_time_us;
+
+			return status_t::success;
+		}
+
+		if (seqnum != (prev_seqnum + 1))
+		{
+			fmt::print(fmt::fg(fmt::color::yellow), "JUMP {} => {}\n", prev_seqnum, seqnum);
+		}
+		prev_seqnum = seqnum;
+	}
+
+	if (prev_seqnum != last_seqnum)
+	{
+		fmt::print(fmt::fg(fmt::color::red), "LOST {} => {}\n", prev_seqnum + 1, last_seqnum);
+	}
+
+	return status_t::failed;
 }
 
 auto stream_t::send(const uint8_t* data, int size) const -> int
