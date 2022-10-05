@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <iostream>
+#include <future>
 #include <numeric>
 #include <deque>
 
@@ -118,9 +119,11 @@ auto main() -> int
 	GLuint dummy_vao {GL_NONE};
 	glCreateVertexArrays(1, &dummy_vao);
 
-
-	stream_t stream;
-	stream.initialize(config::server_ip, config::server_port);
+	std::vector<stream_t> streams (config::num_streams);
+	for (auto i = 0; i < streams.size(); i++)
+	{
+		streams[i].initialize(config::server_addr[i].ip, config::server_addr[i].port);
+	}
 
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
 
@@ -144,7 +147,19 @@ auto main() -> int
 
 		update_pose(window, pose);
 
-		if (const auto stats = stream.render(pose, frame_buffer.data()); stats)
+		std::vector<std::future<std::optional<stream_t::stats_t>>> futures;
+		for (auto&& s : streams)
+		{
+			futures.push_back(
+				std::async(std::launch::async,
+					[&]() { return s.render(pose, frame_buffer.data()); }));
+		}
+
+		std::vector<std::optional<stream_t::stats_t>> stats;
+		for (auto&& f : futures) stats.push_back(f.get());
+
+		//if (const auto stats = stream.render(pose, frame_buffer.data()); stats)
+		if (stats[0])
 		{
 			update_data(frame_buffer_texture, frame_buffer.data());
 
@@ -152,7 +167,7 @@ auto main() -> int
 			fmt::print(
 				frame_time <= target_frame_time ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::red),
 				"Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
-				frame_time * 1e3, stats->pose_rtt_ns * 1e-6, stats->render_time_us * 1e-3, stats->stream_time_us * 1e-3);
+				frame_time * 1e3, stats[0]->pose_rtt_ns * 1e-6, stats[0]->render_time_us * 1e-3, stats[0]->stream_time_us * 1e-3);
 		}
 
 		glUseProgram(program.handle);
@@ -164,7 +179,7 @@ auto main() -> int
 		glfwPollEvents();
 	}
 
-	stream.shutdown();
+	for (auto&& s : streams) s.shutdown();
 
 	glfwDestroyWindow(window);
 	glfwTerminate();

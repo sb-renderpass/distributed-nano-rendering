@@ -34,7 +34,6 @@ constexpr auto all_pkt_bitmask     = (1ULL << num_pkts_per_frame) - 1ULL;
 constexpr auto target_frame_time   = 1.0F / config::target_fps;
 constexpr auto timeout_us          = static_cast<int64_t>(target_frame_time * 1e6F);
 
-
 auto get_timestamp_ns() -> uint64_t
 {
 	return std::chrono::duration_cast<std::chrono::nanoseconds>(
