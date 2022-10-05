@@ -95,7 +95,8 @@ auto network_task(void* params) -> void
 {
     int addr_family = (int)params;
     int ip_protocol = 0;
-    struct sockaddr_in6 dest_addr;
+    struct sockaddr_in6 client_addr;
+    socklen_t socklen = sizeof(client_addr);
 
     uint8_t pkt_buffer[pkt_buffer_size];
 
@@ -103,17 +104,17 @@ auto network_task(void* params) -> void
     {
         if (addr_family == AF_INET)
         {
-            struct sockaddr_in *dest_addr_ip4 = (struct sockaddr_in *)&dest_addr;
-            dest_addr_ip4->sin_addr.s_addr = htonl(INADDR_ANY);
-            dest_addr_ip4->sin_family = AF_INET;
-            dest_addr_ip4->sin_port = htons(PORT);
+            struct sockaddr_in *client_addr_ip4 = (struct sockaddr_in *)&client_addr;
+            client_addr_ip4->sin_addr.s_addr = htonl(INADDR_ANY);
+            client_addr_ip4->sin_family = AF_INET;
+            client_addr_ip4->sin_port = htons(PORT);
             ip_protocol = IPPROTO_IP;
         }
         else if (addr_family == AF_INET6)
         {
-            bzero(&dest_addr.sin6_addr.un, sizeof(dest_addr.sin6_addr.un));
-            dest_addr.sin6_family = AF_INET6;
-            dest_addr.sin6_port = htons(PORT);
+            bzero(&client_addr.sin6_addr.un, sizeof(client_addr.sin6_addr.un));
+            client_addr.sin6_family = AF_INET6;
+            client_addr.sin6_port = htons(PORT);
             ip_protocol = IPPROTO_IPV6;
         }
 
@@ -154,31 +155,13 @@ auto network_task(void* params) -> void
         constexpr auto rcvbuf_size = sizeof(pose_t);
         setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
 
-        int err = bind(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-        if (err < 0) {
-            ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
+        const auto err = bind(sock, reinterpret_cast<struct sockaddr*>(&client_addr), sizeof(client_addr));
+        if (err < 0)
+        {
+            ESP_LOGE(TAG, "Failed to bind socket! errno=%d", errno);
+            break;
         }
-        ESP_LOGI(TAG, "Socket bound, port %d", PORT);
-
-        struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
-        socklen_t socklen = sizeof(source_addr);
-
-#if defined(CONFIG_LWIP_NETBUF_RECVINFO) && !defined(CONFIG_EXAMPLE_IPV6)
-        struct iovec iov;
-        struct msghdr msg;
-        struct cmsghdr *cmsgtmp;
-        u8_t cmsg_buf[CMSG_SPACE(sizeof(struct in_pktinfo))];
-
-        iov.iov_base = rx_buffer;
-        iov.iov_len = sizeof(rx_buffer);
-        msg.msg_control = cmsg_buf;
-        msg.msg_controllen = sizeof(cmsg_buf);
-        msg.msg_flags = 0;
-        msg.msg_iov = &iov;
-        msg.msg_iovlen = 1;
-        msg.msg_name = (struct sockaddr *)&source_addr;
-        msg.msg_namelen = socklen;
-#endif
+        ESP_LOGI(TAG, "Socket bound to port %d", PORT);
 
         constexpr auto num_pkts_per_slice = static_cast<int>(std::ceil(static_cast<float>(slice_buffer_size) / pkt_buffer_size));
         constexpr auto num_pkts_per_frame = num_pkts_per_slice * num_slices;
@@ -190,7 +173,7 @@ auto network_task(void* params) -> void
 
         for (;;)
         {
-            const int recv_nbytes = recvfrom(sock, &pose, sizeof(pose), 0, (struct sockaddr *)&source_addr, &socklen);
+            const int recv_nbytes = recvfrom(sock, &pose, sizeof(pose), 0, reinterpret_cast<struct sockaddr*>(&client_addr), &socklen);
             if (recv_nbytes == sizeof(pose))
             {
                 auto slice_index = 0U;
@@ -231,7 +214,7 @@ auto network_task(void* params) -> void
                             memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t) - sizeof(pose.ts), &pose.ts, sizeof(pose.ts));
                         }
 
-                        sendto(sock, pkt_buffer, pkt_buffer_size, 0, reinterpret_cast<sockaddr *>(&source_addr), sizeof(source_addr));
+                        sendto(sock, pkt_buffer, pkt_buffer_size, 0, reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
 
                         seqnum++;
                         offset += payload_size;
