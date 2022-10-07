@@ -179,6 +179,9 @@ auto main() -> int
 
 	auto ts_prev = glfwGetTime();
 
+	auto stream_bitmask_prev = (1U << config::num_streams) - 1U; // Start by assuming all streams are active
+	auto stream_bitmask_last = 0U;
+
 	while(!glfwWindowShouldClose(window))
 	{
 		const auto ts_now = glfwGetTime();
@@ -191,6 +194,7 @@ auto main() -> int
 		const auto title = fmt::format("{} | {:.1f} fps", config::name, avg_frame_rate);
 		glfwSetWindowTitle(window, title.data());
 
+		// TODO: Calculate new tiles based on stream_bitmask_prev
 		update_pose(window, pose);
 
 		std::vector<std::future<std::optional<stream_t::stats_t>>> futures;
@@ -201,20 +205,29 @@ auto main() -> int
 					[&, i]() { return streams[i].render(pose, frame_buffers[i].data()); }));
 		}
 
+		// Only recalculate and update instance data when necessary
+		if (stream_bitmask_prev != stream_bitmask_last)
+		{
+			const auto instance_data = create_instance_data(stream_bitmask_prev);
+			glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
+			stream_bitmask_last = stream_bitmask_prev;
+		}
+		const auto num_active_streams_prev = std::popcount(stream_bitmask_prev);
+
 		std::vector<std::optional<stream_t::stats_t>> stats;
-		auto stream_bitmask = 0U;
+		auto stream_bitmask_now = 0U;
 		for (auto i = 0; i < futures.size(); i++)
 		{
 			const auto s = futures[i].get();
 			if (s)
 			{
 				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
-				stream_bitmask |= (1U << i);
+				stream_bitmask_now |= (1U << i);
 			}
 			stats.push_back(s);
 		}
+		stream_bitmask_prev = stream_bitmask_now;
 
-		//if (const auto stats = stream.render(pose, frame_buffer.data()); stats)
 		if (stats[0])
 		{
 			constexpr auto target_frame_time = 1.0F / config::target_fps;
@@ -226,14 +239,11 @@ auto main() -> int
 				frame_time * 1e3, stats[0]->pose_rtt_ns * 1e-6, stats[0]->render_time_us * 1e-3, stats[0]->stream_time_us * 1e-3);
 		}
 
-		const auto instance_data = create_instance_data(stream_bitmask);
-		glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
-
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);
 		glBindVertexArray(vao);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, instance_buffer);
-		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, instance_data.size());
+		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, num_active_streams_prev);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
