@@ -9,6 +9,7 @@ constexpr auto shader_vs = R"glsl(
 out VS_TO_FS
 {
     vec2 texcoord;
+    flat int texture_id;
 } vs_to_fs;
 
 // Hard-coded triangle-strip quad
@@ -19,13 +20,26 @@ vec2 positions[4] = vec2[](
     vec2(+1, +1)
 );
 
+struct instance_t
+{
+    mat4 transform;
+    int  texture_id;
+	int  padding[3];
+};
+
+layout(binding=0, std430) readonly buffer instance_data
+{
+    instance_t instance[];
+};
+
 void main()
 {
     const vec2 position = positions[gl_VertexID];
     const vec2 texcoord = (position + 1) * 0.5F;
 
-    gl_Position = vec4(position, 0, 1);
+    gl_Position = instance[gl_InstanceID].transform * vec4(position, 0, 1);
     vs_to_fs.texcoord = vec2(1 - texcoord.y, texcoord.x); // Transpose and flip texture
+    vs_to_fs.texture_id = instance[gl_InstanceID].texture_id;
 
     /*
     // Screen-space triangle
@@ -52,6 +66,7 @@ constexpr auto shader_fs = R"glsl(
 in VS_TO_FS
 {
     vec2 texcoord;
+    flat int texture_id;
 } vs_to_fs;
 
 out vec4 out_color;
@@ -68,7 +83,7 @@ vec3 unpack_rgb233(uint color)
 
 void main()
 {
-    const vec3 color = unpack_rgb233(texture(in_texture, vec3(vs_to_fs.texcoord, 0)).r);
+    const vec3 color = unpack_rgb233(texture(in_texture, vec3(vs_to_fs.texcoord, vs_to_fs.texture_id)).r);
     out_color = vec4(color, 1);
 }
 

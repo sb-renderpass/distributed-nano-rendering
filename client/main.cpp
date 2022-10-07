@@ -114,6 +114,7 @@ auto main() -> int
 	std::vector<std::vector<uint8_t>> frame_buffers (config::num_streams);
 	for (auto&& fb : frame_buffers) fb.resize(frame_buffer_size, 0b01001001);
 	const auto frame_buffer_texture = gl::texture_builder_t(frame_buffer_height, frame_buffer_width, config::num_streams)
+		.set_data(frame_buffers[0].data())
 		.set_type(GL_TEXTURE_2D_ARRAY)
 		.build();
 
@@ -124,6 +125,37 @@ auto main() -> int
 	GLuint vao {GL_NONE};
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayElementBuffer(vao, ibo);
+
+	struct instance_t
+	{
+		glm::mat4 transform {1};
+		int texture_id {0};
+		int padding[3];
+	};
+
+	std::vector<instance_t> instance_data (config::num_streams, instance_t {});
+	constexpr auto offset_step = 1.0F / config::num_streams;
+	for (auto i = 0; i < instance_data.size(); i++)
+	{
+		constexpr auto scale_x = offset_step;
+		constexpr auto scale_y = 1.0F;
+		const auto offset_x = offset_step * (2 * i - 1);
+		const auto offset_y = 0.0F;
+		instance_data[i] =
+		{
+			.transform = glm::mat4 {
+				scale_x, 0, 0, 0,
+				0, scale_y, 0, 0,
+				0, 0, 0, 0,
+				offset_x, offset_y, 0, 1,
+			},
+			.texture_id = i,
+		};
+	}
+
+	GLuint instance_buffer {GL_NONE};
+	glCreateBuffers(1, &instance_buffer);
+	glNamedBufferStorage(instance_buffer, instance_data.size() * sizeof(instance_data[0]), instance_data.data(), GL_DYNAMIC_STORAGE_BIT);
 
 	std::vector<stream_t> streams (config::num_streams);
 	for (auto i = 0; i < streams.size(); i++)
@@ -173,8 +205,10 @@ auto main() -> int
 		if (stats[0])
 		{
 			constexpr auto target_frame_time = 1.0F / config::target_fps;
+			const auto is_latency_high = frame_time > target_frame_time;
+			//const auto is_latency_high = stats[0]->pose_rtt_ns * 1e-9F > target_frame_time;
 			fmt::print(
-				frame_time <= target_frame_time ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::red),
+				is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
 				"Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
 				frame_time * 1e3, stats[0]->pose_rtt_ns * 1e-6, stats[0]->render_time_us * 1e-3, stats[0]->stream_time_us * 1e-3);
 		}
@@ -182,7 +216,8 @@ auto main() -> int
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);
 		glBindVertexArray(vao);
-		glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, 0);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, instance_buffer);
+		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, instance_data.size());
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();

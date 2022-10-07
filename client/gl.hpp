@@ -128,7 +128,7 @@ public:
 	texture_builder_t(int width, int height, int depth=0)
 		: width {width}, height {height}, depth {depth} {}
 
-	auto add_data(const uint8_t* data) -> texture_builder_t&
+	auto set_data(const uint8_t* data) -> texture_builder_t&
 	{
 		this->data = data;
 		return *this;
@@ -160,7 +160,11 @@ public:
 				break;
 		}
 
-		if (data) update_data(texture, data); // TODO: Support other layers
+		if (data)
+		{
+			for (auto i = 0; i < depth; i++) update_data(texture, data, i); // Set same data for all layers
+		}
+
 		texture.texel = {GL_RED_INTEGER, GL_UNSIGNED_BYTE};
 		return texture;
 	}
