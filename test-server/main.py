@@ -27,7 +27,7 @@ def main():
     print("[ Test Server ]")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.settimeout(10) # TODO: Use SO_RCVTIMEO
+    sock.settimeout(30) # TODO: Use SO_RCVTIMEO
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_DONTROUTE, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,    POSE_SIZE)
     sock.bind(("", SERVER_PORT))
