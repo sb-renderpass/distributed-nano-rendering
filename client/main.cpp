@@ -1,4 +1,5 @@
 #include <array>
+#include <bit>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -68,6 +69,40 @@ auto update_pose(GLFWwindow* window, pose_t& pose) -> void
 	pose.timestamp = get_timestamp_ns();
 }
 
+struct instance_t
+{
+	glm::mat4 transform {1};
+	int texture_id {0};
+	int padding[3];
+};
+
+auto create_instance_data(uint32_t stream_bitmask) -> std::vector<instance_t>
+{
+	const auto num_active_streams = std::popcount(stream_bitmask);
+	std::vector<instance_t> instance_data (num_active_streams, instance_t {});
+	const auto step = 1.0F / num_active_streams;
+	for (auto i = 0; i < instance_data.size(); i++)
+	{
+		const auto scale_x  = step;
+		const auto scale_y  = 1.0F;
+		const auto offset_x = step * i;
+		const auto offset_y = 0.0F;
+		const auto texture_id = std::countr_zero(stream_bitmask);
+		instance_data[i] =
+		{
+			.transform = glm::mat4 {
+				scale_x, 0, 0, 0,
+				0, scale_y, 0, 0,
+				0, 0, 0, 0,
+				offset_x, offset_y, 0, 1,
+			},
+			.texture_id = texture_id,
+		};
+		stream_bitmask &= ~(1U << texture_id);
+	}
+	return instance_data;
+}
+
 auto main() -> int
 {
 	std::clog << config::name << '\n';
@@ -126,36 +161,9 @@ auto main() -> int
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayElementBuffer(vao, ibo);
 
-	struct instance_t
-	{
-		glm::mat4 transform {1};
-		int texture_id {0};
-		int padding[3];
-	};
-
-	std::vector<instance_t> instance_data (config::num_streams, instance_t {});
-	constexpr auto offset_step = 1.0F / config::num_streams;
-	for (auto i = 0; i < instance_data.size(); i++)
-	{
-		constexpr auto scale_x = offset_step;
-		constexpr auto scale_y = 1.0F;
-		const auto offset_x = offset_step * (2 * i - 1);
-		const auto offset_y = 0.0F;
-		instance_data[i] =
-		{
-			.transform = glm::mat4 {
-				scale_x, 0, 0, 0,
-				0, scale_y, 0, 0,
-				0, 0, 0, 0,
-				offset_x, offset_y, 0, 1,
-			},
-			.texture_id = i,
-		};
-	}
-
 	GLuint instance_buffer {GL_NONE};
 	glCreateBuffers(1, &instance_buffer);
-	glNamedBufferStorage(instance_buffer, instance_data.size() * sizeof(instance_data[0]), instance_data.data(), GL_DYNAMIC_STORAGE_BIT);
+	glNamedBufferStorage(instance_buffer, config::num_streams * sizeof(instance_t), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
 	std::vector<stream_t> streams (config::num_streams);
 	for (auto i = 0; i < streams.size(); i++)
@@ -194,10 +202,15 @@ auto main() -> int
 		}
 
 		std::vector<std::optional<stream_t::stats_t>> stats;
+		auto stream_bitmask = 0U;
 		for (auto i = 0; i < futures.size(); i++)
 		{
 			const auto s = futures[i].get();
-			if (s) update_data(frame_buffer_texture, frame_buffers[i].data(), i);
+			if (s)
+			{
+				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
+				stream_bitmask |= (1U << i);
+			}
 			stats.push_back(s);
 		}
 
@@ -212,6 +225,9 @@ auto main() -> int
 				"Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
 				frame_time * 1e3, stats[0]->pose_rtt_ns * 1e-6, stats[0]->render_time_us * 1e-3, stats[0]->stream_time_us * 1e-3);
 		}
+
+		const auto instance_data = create_instance_data(stream_bitmask);
+		glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
 
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);

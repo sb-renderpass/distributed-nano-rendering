@@ -13,11 +13,11 @@ out VS_TO_FS
 } vs_to_fs;
 
 // Hard-coded triangle-strip quad
-vec2 positions[4] = vec2[](
-    vec2(-1, -1),
-    vec2(-1, +1),
-    vec2(+1, -1),
-    vec2(+1, +1)
+vec2 texcoords[4] = vec2[](
+    vec2(0, 0),
+    vec2(0, 1),
+    vec2(1, 0),
+    vec2(1, 1)
 );
 
 struct instance_t
@@ -34,10 +34,8 @@ layout(binding=0, std430) readonly buffer instance_data
 
 void main()
 {
-    const vec2 position = positions[gl_VertexID];
-    const vec2 texcoord = (position + 1) * 0.5F;
-
-    gl_Position = instance[gl_InstanceID].transform * vec4(position, 0, 1);
+    const vec2 texcoord = texcoords[gl_VertexID];
+    gl_Position = instance[gl_InstanceID].transform * vec4(texcoord, 0, 1) * 2 - 1;
     vs_to_fs.texcoord = vec2(1 - texcoord.y, texcoord.x); // Transpose and flip texture
     vs_to_fs.texture_id = instance[gl_InstanceID].texture_id;
 
