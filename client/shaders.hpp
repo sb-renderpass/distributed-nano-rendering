@@ -11,8 +11,27 @@ out VS_TO_FS
     vec2 texcoord;
 } vs_to_fs;
 
+// Hard-coded triangle-strip quad
+vec2 positions[4] = vec2[](
+    vec2(-1, -1),
+    vec2(-1, +1),
+    vec2(+1, -1),
+    vec2(+1, +1)
+);
+
 void main()
 {
+    const vec2 position = positions[gl_VertexID];
+    const vec2 texcoord = (position + 1) * 0.5F;
+
+    gl_Position = vec4(position, 0, 1);
+    vs_to_fs.texcoord = vec2(1 - texcoord.y, texcoord.x); // Transpose and flip texture
+
+    /*
+    // Screen-space triangle
+    // Render without index buffer
+    // Use glDrawElements(GL_TRIANGLES, 0, 6)
+
     gl_Position = vec4(
         (gl_VertexID / 2) * 4 - 1,
         (gl_VertexID % 2) * 4 - 1,
@@ -22,6 +41,7 @@ void main()
     vs_to_fs.texcoord = vec2(
         1 - (gl_VertexID % 2) * 2,
         (gl_VertexID / 2) * 2);
+    */
 }
 
 )glsl";

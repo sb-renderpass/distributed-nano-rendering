@@ -114,12 +114,16 @@ auto main() -> int
 	std::vector<std::vector<uint8_t>> frame_buffers (config::num_streams);
 	for (auto&& fb : frame_buffers) fb.resize(frame_buffer_size, 0b01001001);
 	const auto frame_buffer_texture = gl::texture_builder_t(frame_buffer_height, frame_buffer_width, config::num_streams)
-		//.add_data(frame_buffers[0].data())
 		.set_type(GL_TEXTURE_2D_ARRAY)
 		.build();
 
-	GLuint dummy_vao {GL_NONE};
-	glCreateVertexArrays(1, &dummy_vao);
+	std::array<uint32_t, 4> indices {{0, 1, 2, 3}};
+	GLuint ibo {GL_NONE};
+	glCreateBuffers(1, &ibo);
+	glNamedBufferStorage(ibo, indices.size() * sizeof(indices[0]), indices.data(), GL_DYNAMIC_STORAGE_BIT);
+	GLuint vao {GL_NONE};
+	glCreateVertexArrays(1, &vao);
+	glVertexArrayElementBuffer(vao, ibo);
 
 	std::vector<stream_t> streams (config::num_streams);
 	for (auto i = 0; i < streams.size(); i++)
@@ -177,8 +181,8 @@ auto main() -> int
 
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);
-		glBindVertexArray(dummy_vao);
-		glDrawArrays(GL_TRIANGLES, 0, 6);
+		glBindVertexArray(vao);
+		glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, 0);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
