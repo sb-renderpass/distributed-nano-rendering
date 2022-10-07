@@ -111,9 +111,11 @@ auto main() -> int
 		.add_shader(GL_FRAGMENT_SHADER, shaders::shader_fs)
 		.build();
 
-	std::vector<uint8_t> frame_buffer (frame_buffer_size, 0b01001001);
-	const auto frame_buffer_texture = gl::texture_builder_t(frame_buffer_height, frame_buffer_width)
-		.add_data(frame_buffer.data())
+	std::vector<std::vector<uint8_t>> frame_buffers (config::num_streams);
+	for (auto&& fb : frame_buffers) fb.resize(frame_buffer_size, 0b01001001);
+	const auto frame_buffer_texture = gl::texture_builder_t(frame_buffer_height, frame_buffer_width, config::num_streams)
+		//.add_data(frame_buffers[0].data())
+		.set_type(GL_TEXTURE_2D_ARRAY)
 		.build();
 
 	GLuint dummy_vao {GL_NONE};
@@ -148,21 +150,24 @@ auto main() -> int
 		update_pose(window, pose);
 
 		std::vector<std::future<std::optional<stream_t::stats_t>>> futures;
-		for (auto&& s : streams)
+		for (auto i = 0; i < streams.size(); i++)
 		{
 			futures.push_back(
 				std::async(std::launch::async,
-					[&]() { return s.render(pose, frame_buffer.data()); }));
+					[&, i]() { return streams[i].render(pose, frame_buffers[i].data()); }));
 		}
 
 		std::vector<std::optional<stream_t::stats_t>> stats;
-		for (auto&& f : futures) stats.push_back(f.get());
+		for (auto i = 0; i < futures.size(); i++)
+		{
+			const auto s = futures[i].get();
+			if (s) update_data(frame_buffer_texture, frame_buffers[i].data(), i);
+			stats.push_back(s);
+		}
 
 		//if (const auto stats = stream.render(pose, frame_buffer.data()); stats)
 		if (stats[0])
 		{
-			update_data(frame_buffer_texture, frame_buffer.data());
-
 			constexpr auto target_frame_time = 1.0F / config::target_fps;
 			fmt::print(
 				frame_time <= target_frame_time ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::red),

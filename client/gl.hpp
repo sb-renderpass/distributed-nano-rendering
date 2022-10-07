@@ -86,29 +86,47 @@ struct texture_t
 	GLuint handle {GL_NONE};
 	int width  {0};
 	int height {0};
+	int depth  {0};
+	GLenum type {GL_TEXTURE_2D};
 	texel_t texel;
 };
 
-auto update_data(const texture_t& texture, const uint8_t* data) -> void
+auto update_data(const texture_t& texture, const uint8_t* data, int layer=0) -> void
 {
 	if (data)
 	{
-		glTextureSubImage2D(
-			texture.handle,
-			0,
-			0, 0,
-			texture.width, texture.height,
-			texture.texel.format,
-			texture.texel.type,
-			data);
+		switch (texture.type)
+		{
+			default: [[fallthrough]];
+			case GL_TEXTURE_2D:
+				glTextureSubImage2D(
+					texture.handle,
+					0,
+					0, 0,
+					texture.width, texture.height,
+					texture.texel.format,
+					texture.texel.type,
+					data);
+				break;
+			case GL_TEXTURE_2D_ARRAY:
+				glTextureSubImage3D(
+					texture.handle,
+					0,
+					0, 0, layer,
+					texture.width, texture.height, 1,
+					texture.texel.format,
+					texture.texel.type,
+					data);
+				break;
+		}
 	}
 }
 
 class texture_builder_t
 {
 public:
-	texture_builder_t(int width, int height)
-		: width {width}, height {height} {}
+	texture_builder_t(int width, int height, int depth=0)
+		: width {width}, height {height}, depth {depth} {}
 
 	auto add_data(const uint8_t* data) -> texture_builder_t&
 	{
@@ -116,22 +134,43 @@ public:
 		return *this;
 	}
 
-	auto build() -> texture_t
+	auto set_type(GLenum type)
 	{
-		texture_t texture {GL_NONE, width, height};
-		glCreateTextures(GL_TEXTURE_2D, 1, &texture.handle);
+		this->type = type;
+		return *this;
+	}
+
+	auto build() const -> texture_t
+	{
+		texture_t texture {GL_NONE, width, height, depth, type};
+		glCreateTextures(type, 1, &texture.handle);
 		glTextureParameteri(texture.handle, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTextureParameteri(texture.handle, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		glTextureStorage2D(texture.handle, 1, GL_R8UI, width, height);
+		glTextureParameteri(texture.handle, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
+		glTextureParameteri(texture.handle, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
+
+		switch (type) // TODO: Support other texture types
+		{
+			default: [[fallthrough]];
+			case GL_TEXTURE_2D:
+				glTextureStorage2D(texture.handle, 1, GL_R8UI, width, height);
+				break;
+			case GL_TEXTURE_2D_ARRAY:
+				glTextureStorage3D(texture.handle, 1, GL_R8UI, width, height, depth);
+				break;
+		}
+
+		if (data) update_data(texture, data); // TODO: Support other layers
 		texture.texel = {GL_RED_INTEGER, GL_UNSIGNED_BYTE};
-		if (data) update_data(texture, data);
 		return texture;
 	}
 
 private:
 	int width  {0};
 	int height {0};
+	int depth  {0};
 	const uint8_t* data {nullptr};
+	GLenum type {GL_TEXTURE_2D};
 };
 
 auto debug_message_callback(

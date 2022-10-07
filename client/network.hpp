@@ -48,6 +48,12 @@ struct pose_t
 	glm::vec2 cam_plane {0, 0};
 };
 
+struct tile_t
+{
+	glm::ivec2 offset {0, 0};
+	glm::ivec2 dims   {0, 0};
+};
+
 using pkt_header_t = uint32_t;
 
 auto unpack_pkt_header(pkt_header_t header)

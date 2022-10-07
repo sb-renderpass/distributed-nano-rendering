@@ -36,7 +36,7 @@ in VS_TO_FS
 
 out vec4 out_color;
 
-layout(binding = 0) uniform usampler2D in_texture;
+layout(binding = 0) uniform usampler2DArray in_texture;
 
 vec3 unpack_rgb233(uint color)
 {
@@ -48,7 +48,7 @@ vec3 unpack_rgb233(uint color)
 
 void main()
 {
-    const vec3 color = unpack_rgb233(texture(in_texture, vs_to_fs.texcoord).r);
+    const vec3 color = unpack_rgb233(texture(in_texture, vec3(vs_to_fs.texcoord, 0)).r);
     out_color = vec4(color, 1);
 }
 
