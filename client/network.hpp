@@ -43,6 +43,7 @@ auto get_timestamp_ns() -> uint64_t
 struct pose_t
 {
 	uint64_t  timestamp {0};
+	uint16_t  frame_num {0};
 	glm::vec2 position  {0, 0};
 	glm::vec2 direction {0, 0};
 	glm::vec2 cam_plane {0, 0};
@@ -60,19 +61,21 @@ struct render_command_t
 	tile_t tile;
 };
 
-using pkt_header_t = uint32_t;
-
-auto unpack_pkt_header(pkt_header_t header)
+struct pkt_header_t
 {
-	const auto padding = (header >> 31) & 0x01;
-	const auto seqnum  = (header >> 24) & 0x7F;
-	const auto offset  = (header >>  0) & 0xFFFFFF;
-	return std::make_tuple(padding, seqnum, offset);
-}
+	uint16_t frame_num    {0};
+	uint32_t padding :  1 {0};
+	uint32_t seqnum  :  7 {0};
+	uint32_t offset  : 24 {0};
+};
 
-auto get_pkt_header(const uint8_t* buffer) -> pkt_header_t
+auto unpack_pkt_header(const uint8_t* buffer) -> pkt_header_t
 {
-	return ntohl(*reinterpret_cast<const pkt_header_t*>(buffer));
+	const uint16_t frame_num = (buffer[0] << 8) | buffer[1];
+	const uint32_t padding   = (buffer[2] >> 7) & 0x01;
+	const uint32_t seqnum    = (buffer[2] >> 0) & 0x7F;
+	const uint32_t offset    = (buffer[3] << 16) | (buffer[4] << 8) | buffer[5];
+	return {frame_num, padding, seqnum, offset};
 }
 
 struct pkt_footer_t
@@ -174,15 +177,13 @@ auto stream_t::render(const render_command_t& cmd, uint8_t* frame_buffer) -> std
 	{
 		if (recv_pkt() < 0) break;
 
-		const auto header = get_pkt_header(pkt_buffer.data());
-		const auto [padding, seqnum, offset] = unpack_pkt_header(header);
-
+		const auto header = unpack_pkt_header(pkt_buffer.data());
 		const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
 
-		const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - padding * footer.padding_len;
-		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer + offset);
+		const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - header.padding * footer.padding_len;
+		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer + header.offset);
 
-		stats.pkt_bitmask |= (1ULL << seqnum);
+		stats.pkt_bitmask |= (1ULL << header.seqnum);
 
 		if (stats.pkt_bitmask == all_pkt_bitmask)
 		{

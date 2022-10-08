@@ -208,7 +208,8 @@ auto main() -> int
 
 	std::deque<double> frame_time_deque (10, 0);
 
-	pose_t pose {0, {22.0F, 11.05F}, {-1, 0}, {0, -1}};
+	uint16_t frame_num = 0;
+	auto pose = pose_t {0, frame_num, {22.0F, 11.05F}, {-1, 0}, {0, -1}};
 
 	auto ts_prev = glfwGetTime();
 
@@ -228,6 +229,7 @@ auto main() -> int
 		glfwSetWindowTitle(window, title.data());
 
 		update_pose(window, pose);
+		pose.frame_num = frame_num++;
 		const auto cmds = calculate_render_commands(pose, stream_bitmask_prev);
 
 		std::vector<std::future<std::optional<stream_t::stats_t>>> futures;
@@ -268,7 +270,7 @@ auto main() -> int
 			//const auto is_latency_high = stats[0]->pose_rtt_ns * 1e-9F > target_frame_time;
 			fmt::print(
 				is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
-				"Mask {:b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
+				"Mask {:04b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
 				stream_bitmask_now,
 				frame_time * 1e3, stats[0]->pose_rtt_ns * 1e-6, stats[0]->render_time_us * 1e-3, stats[0]->stream_time_us * 1e-3);
 		}

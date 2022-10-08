@@ -83,12 +83,14 @@ auto render_task(void* params) -> void
     vTaskDelete(nullptr);
 }
 
-inline auto write_pkt_header(bool padding, uint8_t seqnum, uint32_t offset, uint8_t* buffer) -> void
+inline auto write_pkt_header(uint16_t frame_num, bool padding, uint8_t seqnum, uint32_t offset, uint8_t* buffer) -> void
 {
-    buffer[0] = (padding << 7) | (seqnum & 0x7F);
-    buffer[1] = offset >> 16;
-    buffer[2] = offset >>  8;
-    buffer[3] = offset;
+    buffer[0] = frame_num >> 8;
+    buffer[1] = frame_num >> 0;
+    buffer[2] = (padding << 7) | (seqnum & 0x7F);
+    buffer[3] = offset >> 16;
+    buffer[4] = offset >>  8;
+    buffer[5] = offset;
 }
 
 auto network_task(void* params) -> void
@@ -165,8 +167,7 @@ auto network_task(void* params) -> void
 
         constexpr auto num_pkts_per_slice = static_cast<int>(std::ceil(static_cast<float>(slice_buffer_size) / pkt_buffer_size));
         constexpr auto num_pkts_per_frame = num_pkts_per_slice * num_slices;
-        constexpr auto pkt_header_size    = 4;
-        constexpr auto pkt_payload_size   = pkt_buffer_size - pkt_header_size;
+        constexpr auto pkt_payload_size   = pkt_buffer_size - sizeof(pkt_header_t);
         constexpr auto rem_size_per_slice = slice_buffer_size % pkt_payload_size;
         ESP_LOGI(TAG, "num_pkts_per_frame=%d num_pkts_per_slice=%d rem_size_per_slice=%d",
                 num_pkts_per_frame, num_pkts_per_slice, rem_size_per_slice);
@@ -194,10 +195,10 @@ auto network_task(void* params) -> void
                     for (auto i = 0; i < num_pkts_per_slice; i++)
                     {
                         const auto is_last_pkt = i == num_pkts_per_slice - 1;
-                        write_pkt_header(is_last_pkt, seqnum, offset, pkt_buffer);
+                        write_pkt_header(cmd.pose.num, is_last_pkt, seqnum, offset, pkt_buffer);
 
                         const auto payload_size = is_last_pkt ? rem_size_per_slice : pkt_payload_size;
-                        std::memcpy(pkt_buffer + pkt_header_size, slice[slice_index].buffer + i * pkt_payload_size, payload_size);
+                        std::memcpy(pkt_buffer + sizeof(pkt_header_t), slice[slice_index].buffer + i * pkt_payload_size, payload_size);
 
                         using padding_t = uint16_t;
 

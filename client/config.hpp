@@ -26,9 +26,10 @@ struct server_addr_t
 	int port {3333};
 };
 
-constexpr std::array<server_addr_t, 2> server_addr
+constexpr std::array<server_addr_t, 3> server_addr
 {{
 	{"192.168.12.180",	3333},
+	{"192.168.12.82",	3333},
 	{"127.0.0.1",		3333},
 }};
 
