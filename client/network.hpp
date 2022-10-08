@@ -50,8 +50,14 @@ struct pose_t
 
 struct tile_t
 {
-	glm::ivec2 offset {0, 0};
-	glm::ivec2 dims   {0, 0};
+	float x_scale  {+2};
+	float x_offset {-1};
+};
+
+struct render_command_t
+{
+	pose_t pose;
+	tile_t tile;
 };
 
 using pkt_header_t = uint32_t;
@@ -96,7 +102,7 @@ public:
 	auto initialize(const char* server_ip, int server_port) -> int;
 	auto shutdown() -> void;
 
-	auto render(const pose_t& pose, uint8_t* frame_buffer) -> std::optional<stats_t>;
+	auto render(const render_command_t& cmd, uint8_t* frame_buffer) -> std::optional<stats_t>;
 
 private:
 	int sock {0};
@@ -105,7 +111,7 @@ private:
 
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
 
-	auto send_pose(const pose_t& pose) const -> int;
+	auto send_render_command(const render_command_t& cmd) const -> int;
 	auto recv_pkt() -> int;
 };
 
@@ -120,6 +126,15 @@ auto stream_t::initialize(const char* server_ip, int server_port) -> int
 
 	const auto recv_timeout = timeval { .tv_usec = timeout_us, };
 	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
+
+	constexpr auto priority = 6 << 7;
+	setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
+
+	constexpr auto flag = 1;
+	setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
+
+	//constexpr auto rcvbuf_size = config::pkt_buffer_size;
+	//setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
 
 	//const auto value = 1;
 	//setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
@@ -149,9 +164,9 @@ auto stream_t::shutdown() -> void
 	sock = 0;
 }
 
-auto stream_t::render(const pose_t& pose, uint8_t* frame_buffer) -> std::optional<stats_t>
+auto stream_t::render(const render_command_t& cmd, uint8_t* frame_buffer) -> std::optional<stats_t>
 {
-	send_pose(pose);
+	send_render_command(cmd);
 
 	stats_t stats;
 
@@ -184,9 +199,9 @@ auto stream_t::render(const pose_t& pose, uint8_t* frame_buffer) -> std::optiona
 	return std::nullopt;
 }
 
-auto stream_t::send_pose(const pose_t& pose) const -> int
+auto stream_t::send_render_command(const render_command_t& cmd) const -> int
 {
-	const auto nbytes = sendto(sock, &pose, sizeof(pose), 0,
+	const auto nbytes = sendto(sock, &cmd, sizeof(cmd), 0,
 		reinterpret_cast<const sockaddr*>(&server_addr), sizeof(server_addr));
 	if (nbytes < 0)
 	{

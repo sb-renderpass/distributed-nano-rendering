@@ -103,6 +103,39 @@ auto create_instance_data(uint32_t stream_bitmask) -> std::vector<instance_t>
 	return instance_data;
 }
 
+auto calculate_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> std::vector<render_command_t>
+{
+	const auto num_active_streams = std::popcount(stream_bitmask);
+	std::vector<render_command_t> cmds (config::num_streams);
+	const auto delta_active = 2.0F / num_active_streams;
+	const auto delta_ideal  = 2.0F / config::num_streams;
+	for (auto i = 0, count = 0; i < cmds.size(); i++)
+	{
+		if (stream_bitmask & (1U << i))
+		{
+			cmds[i] = {
+				.pose = pose,
+				.tile = tile_t {
+					.x_scale  = delta_active,
+					.x_offset = delta_active * count - 1,
+				},
+			};
+			count++;
+		}
+		else
+		{
+			cmds[i] = {
+				.pose = pose,
+				.tile = tile_t {
+					.x_scale  = delta_ideal,
+					.x_offset = delta_ideal * i - 1,
+				},
+			};
+		}
+	}
+	return cmds;
+}
+
 auto main() -> int
 {
 	std::clog << config::name << '\n';
@@ -194,15 +227,15 @@ auto main() -> int
 		const auto title = fmt::format("{} | {:.1f} fps", config::name, avg_frame_rate);
 		glfwSetWindowTitle(window, title.data());
 
-		// TODO: Calculate new tiles based on stream_bitmask_prev
 		update_pose(window, pose);
+		const auto cmds = calculate_render_commands(pose, stream_bitmask_prev);
 
 		std::vector<std::future<std::optional<stream_t::stats_t>>> futures;
 		for (auto i = 0; i < streams.size(); i++)
 		{
 			futures.push_back(
 				std::async(std::launch::async,
-					[&, i]() { return streams[i].render(pose, frame_buffers[i].data()); }));
+					[&, i]() { return streams[i].render(cmds[i], frame_buffers[i].data()); }));
 		}
 
 		// Only recalculate and update instance data when necessary
@@ -235,7 +268,8 @@ auto main() -> int
 			//const auto is_latency_high = stats[0]->pose_rtt_ns * 1e-9F > target_frame_time;
 			fmt::print(
 				is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
-				"Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
+				"Mask {:b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
+				stream_bitmask_now,
 				frame_time * 1e3, stats[0]->pose_rtt_ns * 1e-6, stats[0]->render_time_us * 1e-3, stats[0]->stream_time_us * 1e-3);
 		}
 

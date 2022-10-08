@@ -13,6 +13,18 @@ struct pose_t
     float plane_y {0};
 };
 
+struct tile_t
+{
+    float x_scale  {+2};
+    float x_offset {-1};
+};
+
+struct render_command_t
+{
+    pose_t pose;
+    tile_t tile;
+};
+
 struct frame_t
 {
     int width  {0};

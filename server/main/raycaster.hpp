@@ -92,21 +92,23 @@ auto init_renderer(int frame_buffer_width, int frame_buffer_height) -> void
 }
 
 auto render_slice(
-    const pose_t& pose,
+    const render_command_t& cmd,
     int slice_start,
     int slice_stop,
     frame_t& frame) -> void
 {
     texture_cache_t<texture_height> tex_cache;
 
+    const auto x_scale = cmd.tile.x_scale / frame.width;
     for (auto x = slice_start, i = 0; x < slice_stop; x++, i++)
     {
-        const float cam_x = static_cast<float>(2 * x) / frame.width - 1.0F;
-        const float ray_dir_x = pose.dir_x + pose.plane_x * cam_x;
-        const float ray_dir_y = pose.dir_y + pose.plane_y * cam_x;
+        //const float cam_x = static_cast<float>(2 * x) / frame.width - 1.0F;
+        const float cam_x = x * x_scale + cmd.tile.x_offset;
+        const float ray_dir_x = cmd.pose.dir_x + cmd.pose.plane_x * cam_x;
+        const float ray_dir_y = cmd.pose.dir_y + cmd.pose.plane_y * cam_x;
 
-        auto map_x = static_cast<int>(pose.pos_x);
-        auto map_y = static_cast<int>(pose.pos_y);
+        auto map_x = static_cast<int>(cmd.pose.pos_x);
+        auto map_y = static_cast<int>(cmd.pose.pos_y);
 
         const auto delta_dist_x = (ray_dir_x == 0) ? 1e30F : std::abs(1.0F / ray_dir_x);
         const auto delta_dist_y = (ray_dir_y == 0) ? 1e30F : std::abs(1.0F / ray_dir_y);
@@ -120,22 +122,22 @@ auto render_slice(
         if (ray_dir_x < 0)
         {
             step_x = -1;
-            side_dist_x = (pose.pos_x - map_x) * delta_dist_x;
+            side_dist_x = (cmd.pose.pos_x - map_x) * delta_dist_x;
         }
         else
         {
             step_x = 1;
-            side_dist_x = (map_x + 1.0F - pose.pos_x) * delta_dist_x;
+            side_dist_x = (map_x + 1.0F - cmd.pose.pos_x) * delta_dist_x;
         }
         if (ray_dir_y < 0)
         {
             step_y = -1;
-            side_dist_y = (pose.pos_y - map_y) * delta_dist_y;
+            side_dist_y = (cmd.pose.pos_y - map_y) * delta_dist_y;
         }
         else
         {
             step_y = 1;
-            side_dist_y = (map_y + 1.0F - pose.pos_y) * delta_dist_y;
+            side_dist_y = (map_y + 1.0F - cmd.pose.pos_y) * delta_dist_y;
         }
 
         auto front_side = true;
@@ -181,8 +183,8 @@ auto render_slice(
             }
 
             auto tex_u = front_side ?
-                pose.pos_x + perp_wall_dist * ray_dir_x :
-                pose.pos_y + perp_wall_dist * ray_dir_y;
+                cmd.pose.pos_x + perp_wall_dist * ray_dir_x :
+                cmd.pose.pos_y + perp_wall_dist * ray_dir_y;
             tex_u -= int(tex_u);
 
             auto tex_x = int(tex_u * texture_width);
@@ -240,13 +242,13 @@ auto render_slice(
     } // main loop
 
 #if 0
-    const auto sprite_x = light.pos_x - pose.pos_x;
-    const auto sprite_y = light.pos_y - pose.pos_y;
+    const auto sprite_x = light.pos_x - cmd.pose.pos_x;
+    const auto sprite_y = light.pos_y - cmd.pose.pos_y;
 
-    const auto inv_det = 1.0F / (pose.plane_x * pose.dir_y - pose.plane_y * pose.dir_x);
+    const auto inv_det = 1.0F / (cmd.pose.plane_x * cmd.pose.dir_y - cmd.pose.plane_y * cmd.pose.dir_x);
 
-    const auto tfm_x = inv_det * (sprite_x * pose.dir_y   - sprite_y * pose.dir_x);
-    const auto tfm_y = inv_det * (sprite_y * pose.plane_x - sprite_x * pose.plane_y);
+    const auto tfm_x = inv_det * (sprite_x * cmd.pose.dir_y   - sprite_y * cmd.pose.dir_x);
+    const auto tfm_y = inv_det * (sprite_y * cmd.pose.plane_x - sprite_x * cmd.pose.plane_y);
 
     const auto sprite_screen_x = int((frame.width / 2) * (1.0F + tfm_x / tfm_y));
 

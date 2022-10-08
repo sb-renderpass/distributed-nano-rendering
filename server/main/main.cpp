@@ -47,7 +47,7 @@ constexpr auto slice_buffer_size   = frame_buffer_size / num_slices;
 TaskHandle_t render_task_handle  {nullptr};
 TaskHandle_t network_task_handle {nullptr};
 
-pose_t pose;
+render_command_t cmd;
 
 frame_t slice[2];
 
@@ -72,7 +72,7 @@ auto render_task(void* params) -> void
         {
             const auto slice_index = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             render_elapsed -= esp_timer_get_time();
-            render_slice(pose, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
+            render_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
             render_elapsed += esp_timer_get_time();
             if (slice_id == 0) xTaskNotifyGive(network_task_handle);
         }
@@ -152,7 +152,7 @@ auto network_task(void* params) -> void
         constexpr auto flag = 1;
         setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
 
-        constexpr auto rcvbuf_size = sizeof(pose_t);
+        constexpr auto rcvbuf_size = sizeof(render_command_t);
         setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
 
         const auto err = bind(sock, reinterpret_cast<struct sockaddr*>(&client_addr), sizeof(client_addr));
@@ -173,8 +173,8 @@ auto network_task(void* params) -> void
 
         for (;;)
         {
-            const int recv_nbytes = recvfrom(sock, &pose, sizeof(pose), 0, reinterpret_cast<struct sockaddr*>(&client_addr), &socklen);
-            if (recv_nbytes == sizeof(pose))
+            const int recv_nbytes = recvfrom(sock, &cmd, sizeof(cmd), 0, reinterpret_cast<struct sockaddr*>(&client_addr), &socklen);
+            if (recv_nbytes == sizeof(cmd))
             {
                 auto slice_index = 0U;
                 xTaskNotify(render_task_handle, slice_index, eSetValueWithOverwrite);
@@ -209,9 +209,9 @@ auto network_task(void* params) -> void
 
                         if (seqnum == num_pkts_per_frame - 1)
                         {
-                            memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t) - sizeof(pose.ts) - sizeof(pipeline_stats),
+                            memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t) - sizeof(cmd.pose.ts) - sizeof(pipeline_stats),
                                     &pipeline_stats, sizeof(pipeline_stats));
-                            memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t) - sizeof(pose.ts), &pose.ts, sizeof(pose.ts));
+                            memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t) - sizeof(cmd.pose.ts), &cmd.pose.ts, sizeof(cmd.pose.ts));
                         }
 
                         sendto(sock, pkt_buffer, pkt_buffer_size, 0, reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
