@@ -203,8 +203,6 @@ auto main() -> int
 		streams[i].initialize(config::server_addr[i].ip, config::server_addr[i].port, frame_buffers[i].data());
 	}
 
-	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
-
 	std::deque<double> frame_time_deque (10, 0);
 
 	uint16_t frame_num = 0;
@@ -242,9 +240,12 @@ auto main() -> int
 		}
 		const auto num_active_streams_prev = std::popcount(stream_bitmask_prev);
 
-		std::this_thread::sleep_for(std::chrono::duration<float>(1.0F / config::target_fps));
+		using namespace std::chrono_literals;
+		std::this_thread::sleep_for(33ms);
+		//std::this_thread::sleep_for(std::chrono::duration<float>(1.0F / config::target_fps));
 
 		auto stream_bitmask_now = 0U;
+		auto last_stats = stream_t::stats_t {};
 		for (auto i = 0; i < streams.size(); i++)
 		{
 			const auto stats = streams[i].stop();
@@ -252,21 +253,19 @@ auto main() -> int
 			{
 				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
 				stream_bitmask_now |= (1U << i);
-
-				if (i == 0)
-				{
-					constexpr auto target_frame_time = 1.0F / config::target_fps;
-					const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
-					//const auto is_latency_high = stats->pose_rtt_ns * 1e-9F > target_frame_time;
-					fmt::print(
-						is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
-						"Mask {:04b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
-						stream_bitmask_now,
-						frame_time * 1e3, stats->pose_rtt_ns * 1e-6, stats->render_time_us * 1e-3, stats->stream_time_us * 1e-3);
-				}
+				last_stats = *stats;
 			}
 		}
 		stream_bitmask_prev = stream_bitmask_now;
+
+		constexpr auto target_frame_time = 1.0F / config::target_fps;
+		const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
+		//const auto is_latency_high = stats->pose_rtt_ns * 1e-9F > target_frame_time;
+		fmt::print(
+			is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
+			"Mask {:04b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
+			stream_bitmask_now,
+			frame_time * 1e3, last_stats.pose_rtt_ns * 1e-6, last_stats.render_time_us * 1e-3, last_stats.stream_time_us * 1e-3);
 
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);

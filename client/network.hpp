@@ -127,7 +127,7 @@ private:
 
 auto stream_t::initialize(const char* server_ip, int server_port, uint8_t* frame_buffer) -> int
 {
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0)
 	{
 		std::cerr << "Failed to create socket!\n";
@@ -137,11 +137,11 @@ auto stream_t::initialize(const char* server_ip, int server_port, uint8_t* frame
 	//const auto recv_timeout = timeval { .tv_usec = timeout_us, };
 	//setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
-	constexpr auto priority = 6 << 7;
-	setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
+	//constexpr auto priority = 6 << 7;
+	//setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
 
-	constexpr auto flag = 1;
-	setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
+	//constexpr auto flag = 1;
+	//setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
 
 	//constexpr auto rcvbuf_size = config::pkt_buffer_size;
 	//setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
@@ -210,7 +210,17 @@ auto stream_t::send_render_command(const render_command_t& cmd) -> int
 
 auto stream_t::recv_pkt() -> int
 {
-	const auto nbytes = ::recv(sock, pkt_buffer.data(), pkt_buffer.size(), 0);
+	const auto nbytes = recv(sock, pkt_buffer.data(), pkt_buffer.size(), 0);
+
+	/*
+	struct sockaddr_in sender;
+	socklen_t sender_size = sizeof(sender);
+	bzero(&sender, sizeof(sender));
+	const auto nbytes = recvfrom(sock, pkt_buffer.data(), pkt_buffer.size(), 0, (struct sockaddr*)&sender, &sender_size);
+	const auto sender_ip = inet_ntoa(sender.sin_addr);
+	std::clog << sender_ip << '\n';
+	*/
+
 	if (nbytes < 0)
 	{
 		std::cerr << "Failed to recv frame packet!\n";
