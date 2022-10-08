@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <future>
 #include <iostream>
 #include <numeric>
 #include <deque>
@@ -234,16 +233,6 @@ auto main() -> int
 
 		for (auto i = 0; i < streams.size(); i++) streams[i].start(cmds[i]);
 
-		/*
-		std::vector<std::future<std::optional<stream_t::stats_t>>> futures;
-		for (auto i = 0; i < streams.size(); i++)
-		{
-			futures.push_back(
-				std::async(std::launch::async,
-					[&, i]() { return streams[i].render(cmds[i], frame_buffers[i].data()); }));
-		}
-		*/
-
 		// Only recalculate and update instance data when necessary
 		if (stream_bitmask_prev != stream_bitmask_last)
 		{
@@ -278,34 +267,6 @@ auto main() -> int
 			}
 		}
 		stream_bitmask_prev = stream_bitmask_now;
-
-		/*
-		std::vector<std::optional<stream_t::stats_t>> stats;
-		auto stream_bitmask_now = 0U;
-		for (auto i = 0; i < futures.size(); i++)
-		{
-			const auto s = futures[i].get();
-			if (s)
-			{
-				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
-				stream_bitmask_now |= (1U << i);
-			}
-			stats.push_back(s);
-		}
-		stream_bitmask_prev = stream_bitmask_now;
-
-		if (stats[0])
-		{
-			constexpr auto target_frame_time = 1.0F / config::target_fps;
-			const auto is_latency_high = frame_time > target_frame_time;
-			//const auto is_latency_high = stats[0]->pose_rtt_ns * 1e-9F > target_frame_time;
-			fmt::print(
-				is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
-				"Mask {:04b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
-				stream_bitmask_now,
-				frame_time * 1e3, stats[0]->pose_rtt_ns * 1e-6, stats[0]->render_time_us * 1e-3, stats[0]->stream_time_us * 1e-3);
-		}
-		*/
 
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);

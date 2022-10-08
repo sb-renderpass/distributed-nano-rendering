@@ -106,29 +106,23 @@ public:
 
 	auto initialize(const char* server_ip, int server_port, uint8_t* frame_buffer) -> int;
 	auto shutdown() -> void;
+	auto start(const render_command_t& cmd) -> void;
+	auto stop() -> std::optional<stats_t>;
 
-	auto render(const render_command_t& cmd, uint8_t* frame_buffer) -> std::optional<stats_t>;
-
-//private:
+private:
 	int sock {0};
 	sockaddr_in server_addr;
 	sockaddr_in client_addr;
-
+	uint8_t* frame_buffer {nullptr};
+	std::jthread recv_thread;
+	std::atomic_flag drop_incoming_pkts;
+	std::atomic_flag stats_not_ready;
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
+	stats_t stats;
 
 	auto send_render_command(const render_command_t& cmd) -> int;
 	auto recv_pkt() -> int;
-
-	stats_t stats;
-	std::jthread recv_thread;
-	uint8_t* frame_buffer {nullptr};
-	std::atomic_flag drop_incoming_pkts;
-	std::atomic_flag stats_not_ready;
-
 	auto recv_thread_task() -> void;
-
-	auto start(const render_command_t& cmd) -> void;
-	auto stop() -> std::optional<stats_t>;
 };
 
 auto stream_t::initialize(const char* server_ip, int server_port, uint8_t* frame_buffer) -> int
@@ -185,35 +179,20 @@ auto stream_t::shutdown() -> void
 	sock = 0;
 }
 
-auto stream_t::render(const render_command_t& cmd, uint8_t* frame_buffer) -> std::optional<stats_t>
+auto stream_t::start(const render_command_t& cmd) -> void
 {
 	send_render_command(cmd);
+	drop_incoming_pkts.clear();
+}
 
-	stats_t stats;
-
-	while (true)
+auto stream_t::stop() -> std::optional<stats_t>
+{
+	drop_incoming_pkts.test_and_set();
+	if (!stats_not_ready.test_and_set())
 	{
-		if (recv_pkt() < 0) break;
-
-		const auto header = unpack_pkt_header(pkt_buffer.data());
-		const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
-
-		const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - header.padding * footer.padding_len;
-		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer + header.offset);
-
-		stats.pkt_bitmask |= (1ULL << header.seqnum);
-
-		if (stats.pkt_bitmask == all_pkt_bitmask)
-		{
-			const auto pose_recv_timestamp = get_timestamp_ns();
-			const auto pose_rtt_ns = pose_recv_timestamp - footer.timestamp;
-
-			stats.pose_rtt_ns    = pose_rtt_ns;
-			stats.render_time_us = footer.render_time_us;
-			stats.stream_time_us = footer.stream_time_us;
-
-			return stats;
-		}
+		const auto result = std::make_optional(stats);
+		stats = {}; // TODO: Better state management
+		return result;
 	}
 	return std::nullopt;
 }
@@ -250,7 +229,6 @@ auto stream_t::recv_thread_task() -> void
 
 		const auto header = unpack_pkt_header(pkt_buffer.data());
 		const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
-		//std::clog << header.frame_num << ' ' << header.seqnum << '\n';
 
 		const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - header.padding * footer.padding_len;
 		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer + header.offset);
@@ -269,23 +247,5 @@ auto stream_t::recv_thread_task() -> void
 			stats_not_ready.clear();
 		}
 	}
-}
-
-auto stream_t::start(const render_command_t& cmd) -> void
-{
-	send_render_command(cmd);
-	drop_incoming_pkts.clear();
-}
-
-auto stream_t::stop() -> std::optional<stats_t>
-{
-	drop_incoming_pkts.test_and_set();
-	if (!stats_not_ready.test_and_set())
-	{
-		const auto result = std::make_optional(stats);
-		stats = {}; // TODO: Better state management
-		return result;
-	}
-	return std::nullopt;
 }
 
