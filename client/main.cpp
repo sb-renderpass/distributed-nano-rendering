@@ -16,6 +16,7 @@
 #include "gl.hpp"
 #include "config.hpp"
 #include "shaders.hpp"
+#include "types.hpp"
 #include "network.hpp"
 
 auto key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
@@ -135,6 +136,17 @@ auto calculate_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> s
 	return cmds;
 }
 
+auto log_stats(float frame_time, uint32_t stream_bitmask, const stats_t& stats) -> void
+{
+	constexpr auto target_frame_time = 1.0F / config::target_fps;
+	const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
+	fmt::print(
+		is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
+		"Mask {:02b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
+		stream_bitmask,
+		frame_time * 1e3, stats.pose_rtt_ns * 1e-6, stats.render_time_us * 1e-3, stats.stream_time_us * 1e-3);
+}
+
 auto main() -> int
 {
 	std::clog << config::name << '\n';
@@ -151,8 +163,8 @@ auto main() -> int
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT,	true);
 	glfwWindowHint(GLFW_OPENGL_PROFILE,			GLFW_OPENGL_CORE_PROFILE);
 	const auto window = glfwCreateWindow(
-		config::width  * config::render_scale,
-		config::height * config::render_scale,
+		config::width  * config::render_scale_w,
+		config::height * config::render_scale_h,
 		config::name, nullptr, nullptr);
 	if (!window)
 	{
@@ -197,11 +209,7 @@ auto main() -> int
 	glCreateBuffers(1, &instance_buffer);
 	glNamedBufferStorage(instance_buffer, config::num_streams * sizeof(instance_t), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
-	std::vector<stream_t> streams (config::num_streams);
-	for (auto i = 0; i < streams.size(); i++)
-	{
-		streams[i].initialize(config::server_addr[i].ip, config::server_addr[i].port, frame_buffers[i].data());
-	}
+	stream_t stream {config::servers, &frame_buffers};
 
 	std::deque<double> frame_time_deque (10, 0);
 
@@ -229,7 +237,7 @@ auto main() -> int
 		pose.frame_num = frame_num++;
 		const auto cmds = calculate_render_commands(pose, stream_bitmask_prev);
 
-		for (auto i = 0; i < streams.size(); i++) streams[i].start(cmds[i]);
+		stream.start(cmds);
 
 		// Only recalculate and update instance data when necessary
 		if (stream_bitmask_prev != stream_bitmask_last)
@@ -240,32 +248,21 @@ auto main() -> int
 		}
 		const auto num_active_streams_prev = std::popcount(stream_bitmask_prev);
 
-		using namespace std::chrono_literals;
-		std::this_thread::sleep_for(33ms);
-		//std::this_thread::sleep_for(std::chrono::duration<float>(1.0F / config::target_fps));
+		//using namespace std::chrono_literals;
+		//std::this_thread::sleep_for(33ms);
+		std::this_thread::sleep_for(std::chrono::duration<float>(1.0F / config::target_fps));
 
-		auto stream_bitmask_now = 0U;
-		auto last_stats = stream_t::stats_t {};
-		for (auto i = 0; i < streams.size(); i++)
+		const auto result = stream.stop();
+		for (auto i = 0; i < config::num_streams; i++)
 		{
-			const auto stats = streams[i].stop();
-			if (stats)
+			if (result.stream_bitmask & (1U << i))
 			{
 				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
-				stream_bitmask_now |= (1U << i);
-				last_stats = *stats;
+				log_stats(frame_time, result.stream_bitmask, result.stats[i]);
 			}
 		}
-		stream_bitmask_prev = stream_bitmask_now;
-
-		constexpr auto target_frame_time = 1.0F / config::target_fps;
-		const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
-		//const auto is_latency_high = stats->pose_rtt_ns * 1e-9F > target_frame_time;
-		fmt::print(
-			is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
-			"Mask {:04b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
-			stream_bitmask_now,
-			frame_time * 1e3, last_stats.pose_rtt_ns * 1e-6, last_stats.render_time_us * 1e-3, last_stats.stream_time_us * 1e-3);
+		if (result.stream_bitmask > 0) stream_bitmask_prev = result.stream_bitmask;
+		//fmt::print("Mask {:02b}\n", result.stream_bitmask);
 
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);
@@ -276,8 +273,6 @@ auto main() -> int
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 	}
-
-	for (auto&& s : streams) s.shutdown();
 
 	glfwDestroyWindow(window);
 	glfwTerminate();

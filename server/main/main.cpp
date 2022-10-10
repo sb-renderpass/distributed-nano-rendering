@@ -34,10 +34,10 @@ static const char *TAG = "remote_render";
 namespace
 {
 
-constexpr auto frame_buffer_width  = 320;
+constexpr auto frame_buffer_width  = 320 / 2;
 constexpr auto frame_buffer_height = 240;
 constexpr auto pkt_buffer_size     = 1400;
-constexpr auto num_slices          = 8;
+constexpr auto num_slices          = 4;
 
 constexpr auto frame_buffer_size   = frame_buffer_width * frame_buffer_height;
 constexpr auto slice_buffer_size   = frame_buffer_size / num_slices;
@@ -154,8 +154,8 @@ auto network_task(void* params) -> void
         constexpr auto flag = 1;
         setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
 
-        constexpr auto rcvbuf_size = sizeof(render_command_t);
-        setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
+        //constexpr auto rcvbuf_size = sizeof(render_command_t);
+        //setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
 
         const auto err = bind(sock, reinterpret_cast<struct sockaddr*>(&client_addr), sizeof(client_addr));
         if (err < 0)

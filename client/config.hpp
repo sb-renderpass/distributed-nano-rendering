@@ -1,36 +1,37 @@
 #pragma once
 
-#include <array>
+#include <vector>
+
+#include "types.hpp"
+
+inline constexpr auto create_ip(int a, int b, int c, int d) -> uint32_t
+{
+	return (a << 24) | (b << 16) | (c << 8) | d;
+}
 
 namespace config
 {
 
 constexpr auto name				= "ESP32 Remote Render";
-constexpr auto width			= 320;
+constexpr auto width			= 320 / 2;
 constexpr auto height			= 240;
 constexpr auto fov				= 60;
 constexpr auto target_fps		= 30;
-constexpr auto render_scale		= 2;
+constexpr auto render_scale_w	= 4;
+constexpr auto render_scale_h	= 2;
 
 constexpr auto pkt_buffer_size	= 1400;
-constexpr auto num_slices		= 8;
-constexpr auto num_streams		= 1;
+constexpr auto num_slices		= 4;
+constexpr auto num_streams		= 2;
 
 constexpr auto sprint_speed		= 0.1F;
 constexpr auto strafe_speed		= 0.1F;
 constexpr auto rotate_speed		= 0.05F;
 
-struct server_addr_t
-{
-	char ip[16] = "255.255.255.255";
-	int port {3333};
-};
-
-constexpr std::array<server_addr_t, 3> server_addr
+const std::vector<server_t> servers
 {{
-	{"192.168.12.180",	3333},
-	{"192.168.12.82",	3333},
-	{"127.0.0.1",		3333},
+	{create_ip(192, 168, 12, 180), 3333},
+	{create_ip(192, 168, 12,  82), 3333},
 }};
 
 } // namespace config

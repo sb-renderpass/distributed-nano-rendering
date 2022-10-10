@@ -2,25 +2,24 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
-#include <cctype>
 #include <cmath>
 #include <cstring> // memset
 #include <iostream>
 #include <thread>
-#include <optional>
-#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "glm/vec2.hpp"
 #include <fmt/core.h>
 #include <fmt/color.h>
 
 #include "config.hpp"
+#include "types.hpp"
 
 constexpr auto frame_buffer_width  = config::width;
 constexpr auto frame_buffer_height = config::height;
@@ -42,35 +41,6 @@ auto get_timestamp_ns() -> uint64_t
 		std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 
-struct pose_t
-{
-	uint64_t  timestamp {0};
-	uint16_t  frame_num {0};
-	glm::vec2 position  {0, 0};
-	glm::vec2 direction {0, 0};
-	glm::vec2 cam_plane {0, 0};
-};
-
-struct tile_t
-{
-	float x_scale  {+2};
-	float x_offset {-1};
-};
-
-struct render_command_t
-{
-	pose_t pose;
-	tile_t tile;
-};
-
-struct pkt_header_t
-{
-	uint16_t frame_num    {0};
-	uint32_t padding :  1 {0};
-	uint32_t seqnum  :  7 {0};
-	uint32_t offset  : 24 {0};
-};
-
 auto unpack_pkt_header(const uint8_t* buffer) -> pkt_header_t
 {
 	const uint16_t frame_num = (buffer[0] << 8) | buffer[1];
@@ -80,14 +50,6 @@ auto unpack_pkt_header(const uint8_t* buffer) -> pkt_header_t
 	return {frame_num, padding, seqnum, offset};
 }
 
-struct pkt_footer_t
-{
-	uint32_t render_time_us {0};
-	uint32_t stream_time_us {0};
-	uint64_t timestamp      {0};
-	uint16_t padding_len    {0};
-} __attribute__((__packed__));
-
 auto get_pkt_footer(const uint8_t* buffer, int offset) -> pkt_footer_t
 {
 	return *reinterpret_cast<const pkt_footer_t*>(buffer + offset - sizeof(pkt_footer_t));
@@ -96,52 +58,61 @@ auto get_pkt_footer(const uint8_t* buffer, int offset) -> pkt_footer_t
 class stream_t
 {
 public:
-	struct stats_t
+	struct result_t
 	{
-		uint64_t pkt_bitmask    {0};
-		uint64_t pose_rtt_ns    {0};
-		uint32_t render_time_us {0};
-		uint32_t stream_time_us {0};
+		uint32_t stream_bitmask {};
+		std::array<stats_t, config::num_streams> stats {};
 	};
 
-	auto initialize(const char* server_ip, int server_port, uint8_t* frame_buffer) -> int;
-	auto shutdown() -> void;
-	auto start(const render_command_t& cmd) -> void;
-	auto stop() -> std::optional<stats_t>;
+	~stream_t();
 
+	stream_t(
+		const std::vector<server_t>& server_addr,
+		std::vector<std::vector<uint8_t>>* frame_buffers);
+
+	auto start(const std::vector<render_command_t>& cmds) -> void;
+	auto stop() -> result_t;
+ 
 private:
+	std::vector<std::vector<uint8_t>>* frame_buffers; 
+
 	int sock {0};
-	sockaddr_in server_addr;
+	std::vector<sockaddr_in> server_addrs;
 	sockaddr_in client_addr;
-	uint8_t* frame_buffer {nullptr};
 	std::jthread recv_thread;
 	std::atomic_flag drop_incoming_pkts;
 	std::atomic_flag stats_not_ready;
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
-	stats_t stats;
+	std::unordered_map<uint32_t, int> server_id_map;
+	result_t result {};
+	uint32_t stream_bitmask {0};
 
-	auto send_render_command(const render_command_t& cmd) -> int;
+	auto send_render_command(const render_command_t& cmd, int server_id) -> int;
 	auto recv_pkt() -> int;
 	auto recv_thread_task() -> void;
 };
 
-auto stream_t::initialize(const char* server_ip, int server_port, uint8_t* frame_buffer) -> int
+stream_t::~stream_t()
+{
+	close(sock);
+}
+
+stream_t::stream_t(
+	const std::vector<server_t>& servers,
+	std::vector<std::vector<uint8_t>>* frame_buffers)
+	: frame_buffers {frame_buffers}
 {
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (sock < 0)
-	{
-		std::cerr << "Failed to create socket!\n";
-		return -1;
-	}
+	if (sock < 0) throw std::runtime_error {"Failed to create stream socket!"};
 
 	//const auto recv_timeout = timeval { .tv_usec = timeout_us, };
 	//setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
-	//constexpr auto priority = 6 << 7;
-	//setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
+	constexpr auto priority = 6 << 7;
+	setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
 
-	//constexpr auto flag = 1;
-	//setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
+	constexpr auto flag = 1;
+	setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
 
 	//constexpr auto rcvbuf_size = config::pkt_buffer_size;
 	//setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
@@ -149,10 +120,16 @@ auto stream_t::initialize(const char* server_ip, int server_port, uint8_t* frame
 	//const auto value = 1;
 	//setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
 
-	std::memset(&server_addr, 0, sizeof(server_addr));
-	server_addr.sin_family      = AF_INET;
-	server_addr.sin_addr.s_addr = inet_addr(server_ip);
-	server_addr.sin_port        = htons(server_port);
+	for (auto i = 0; i < servers.size(); i++)
+	{
+		sockaddr_in server_addr;
+		std::memset(&server_addr, 0, sizeof(server_addr));
+		server_addr.sin_family      = AF_INET;
+		server_addr.sin_addr.s_addr = htonl(servers[i].ip);
+		server_addr.sin_port        = htons(servers[i].port);
+		server_addrs.push_back(server_addr);
+		server_id_map.insert({servers[i].ip, i});
+	}
 
 	std::memset(&client_addr, 0, sizeof(client_addr));
 	client_addr.sin_family      = AF_INET;
@@ -161,71 +138,53 @@ auto stream_t::initialize(const char* server_ip, int server_port, uint8_t* frame
 
 	if (bind(sock, reinterpret_cast<const sockaddr*>(&client_addr), sizeof(client_addr)) < 0)
 	{
-		std::cerr << "Failed to bind socket!\n";
-		return -1;
+		throw std::runtime_error {"Failed to bind to stream socket!"};
 	}
 
-	this->frame_buffer = frame_buffer;
+	this->frame_buffers = frame_buffers;
 	drop_incoming_pkts.test_and_set();
 	stats_not_ready.test_and_set();
 	recv_thread = std::jthread {[this](){ recv_thread_task(); }};
-
-	return 0;
 }
 
-auto stream_t::shutdown() -> void
+auto stream_t::start(const std::vector<render_command_t>& cmds) -> void
 {
-	close(sock);
-	sock = 0;
-}
-
-auto stream_t::start(const render_command_t& cmd) -> void
-{
-	send_render_command(cmd);
+	for (auto i = 0; i < cmds.size(); i++) send_render_command(cmds[i], i);
 	drop_incoming_pkts.clear();
 }
 
-auto stream_t::stop() -> std::optional<stats_t>
+auto stream_t::stop() -> result_t
 {
 	drop_incoming_pkts.test_and_set();
-	if (!stats_not_ready.test_and_set())
-	{
-		const auto result = std::make_optional(stats);
-		stats = {}; // TODO: Better state management
-		return result;
-	}
-	return std::nullopt;
+	return std::exchange(result, {});
 }
 
-auto stream_t::send_render_command(const render_command_t& cmd) -> int
+auto stream_t::send_render_command(const render_command_t& cmd, int server_id) -> int
 {
 	const auto nbytes = sendto(sock, &cmd, sizeof(cmd), 0,
-		reinterpret_cast<const sockaddr*>(&server_addr), sizeof(server_addr));
-	if (nbytes < 0)
-	{
-		std::cerr << "Failed to send pose!\n";
-	}
+		reinterpret_cast<const sockaddr*>(&server_addrs[server_id]), sizeof(server_addrs[server_id]));
+	if (nbytes < 0) std::cerr << "Failed to send pose!\n";
 	return nbytes;
 }
 
 auto stream_t::recv_pkt() -> int
 {
-	const auto nbytes = recv(sock, pkt_buffer.data(), pkt_buffer.size(), 0);
+	struct sockaddr_in server_addr;
+	socklen_t server_addr_size = sizeof(server_addr);
+	std::memset(&server_addr, sizeof(server_addr), 0);
 
-	/*
-	struct sockaddr_in sender;
-	socklen_t sender_size = sizeof(sender);
-	bzero(&sender, sizeof(sender));
-	const auto nbytes = recvfrom(sock, pkt_buffer.data(), pkt_buffer.size(), 0, (struct sockaddr*)&sender, &sender_size);
-	const auto sender_ip = inet_ntoa(sender.sin_addr);
-	std::clog << sender_ip << '\n';
-	*/
+	const auto nbytes = recvfrom(
+		sock, pkt_buffer.data(), pkt_buffer.size(), 0,
+		reinterpret_cast<struct sockaddr*>(&server_addr), &server_addr_size);
+	const auto server_ip = ntohl(server_addr.sin_addr.s_addr);
 
-	if (nbytes < 0)
+	if (nbytes < pkt_buffer.size())
 	{
 		std::cerr << "Failed to recv frame packet!\n";
+		return -1;
 	}
-	return nbytes;
+
+	return server_id_map.at(server_ip);
 }
 
 auto stream_t::recv_thread_task() -> void
@@ -233,28 +192,26 @@ auto stream_t::recv_thread_task() -> void
 	// TODO: Handle graceful exit
 	for (;;)
 	{
-		recv_pkt();
-
-		if (drop_incoming_pkts.test()) continue;
+		const auto server_id = recv_pkt();
+		if (drop_incoming_pkts.test() || server_id < 0) continue;
 
 		const auto header = unpack_pkt_header(pkt_buffer.data());
 		const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
 
 		const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - header.padding * footer.padding_len;
-		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, frame_buffer + header.offset);
+		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, (*frame_buffers)[server_id].data() + header.offset);
 
-		stats.pkt_bitmask |= (1ULL << header.seqnum);
-
-		if (stats.pkt_bitmask == all_pkt_bitmask)
+		result.stats[server_id].pkt_bitmask |= (1ULL << header.seqnum);
+		if (result.stats[server_id].pkt_bitmask == all_pkt_bitmask)
 		{
 			const auto pose_recv_timestamp = get_timestamp_ns();
 			const auto pose_rtt_ns = pose_recv_timestamp - footer.timestamp;
 
-			stats.pose_rtt_ns    = pose_rtt_ns;
-			stats.render_time_us = footer.render_time_us;
-			stats.stream_time_us = footer.stream_time_us;
+			result.stats[server_id].pose_rtt_ns    = pose_rtt_ns;
+			result.stats[server_id].render_time_us = footer.render_time_us;
+			result.stats[server_id].stream_time_us = footer.stream_time_us;
 
-			stats_not_ready.clear();
+			result.stream_bitmask |= (1U << server_id);
 		}
 	}
 }
