@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring> // memset
 #include <iostream>
+#include <pthread.h>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -86,6 +87,7 @@ private:
 	std::unordered_map<uint32_t, int> server_id_map;
 	result_t result {};
 	uint32_t stream_bitmask {0};
+	cpu_set_t cpu_set;
 
 	auto send_render_command(const render_command_t& cmd, int server_id) -> int;
 	auto recv_pkt() -> int;
@@ -144,7 +146,14 @@ stream_t::stream_t(
 	this->frame_buffers = frame_buffers;
 	drop_incoming_pkts.test_and_set();
 	stats_not_ready.test_and_set();
+
+	CPU_ZERO(&cpu_set);
+	CPU_SET(1, &cpu_set);
 	recv_thread = std::jthread {[this](){ recv_thread_task(); }};
+	if (pthread_setaffinity_np(recv_thread.native_handle(), sizeof(cpu_set), &cpu_set) != 0)
+	{
+		std::cerr << "Failed to set recv-thread affinity!\n";
+	}
 }
 
 auto stream_t::start(const std::vector<render_command_t>& cmds) -> void
