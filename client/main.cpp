@@ -230,7 +230,8 @@ auto main() -> int
 		const auto avg_frame_rate = frame_time_deque.size() / std::reduce(std::cbegin(frame_time_deque), std::cend(frame_time_deque));
 		ts_prev = ts_now;
 
-		const auto title = fmt::format("{} | {:.1f} fps", config::name, avg_frame_rate);
+		const auto num_active_streams_prev = std::popcount(stream_bitmask_prev);
+		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams_prev);
 		glfwSetWindowTitle(window, title.data());
 
 		update_pose(window, pose);
@@ -246,7 +247,6 @@ auto main() -> int
 			glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
 			stream_bitmask_last = stream_bitmask_prev;
 		}
-		const auto num_active_streams_prev = std::popcount(stream_bitmask_prev);
 
 		//using namespace std::chrono_literals;
 		//std::this_thread::sleep_for(33ms);
