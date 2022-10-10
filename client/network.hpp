@@ -211,7 +211,7 @@ auto stream_t::recv_thread_task() -> void
 		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, (*frame_buffers)[server_id].data() + header.offset);
 
 		result.stats[server_id].pkt_bitmask |= (1ULL << header.seqnum);
-		if (result.stats[server_id].pkt_bitmask == all_pkt_bitmask)
+		if (header.seqnum == last_seqnum && result.stats[server_id].pkt_bitmask == all_pkt_bitmask)
 		{
 			const auto pose_recv_timestamp = get_timestamp_ns();
 			const auto pose_rtt_ns = pose_recv_timestamp - footer.timestamp;
