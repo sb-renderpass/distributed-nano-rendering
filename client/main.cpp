@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <iostream>
+#include <pthread.h>
 #include <numeric>
 #include <deque>
 
@@ -149,6 +150,14 @@ auto log_stats(float frame_time, uint32_t stream_bitmask, const stats_t& stats) 
 
 auto main() -> int
 {
+	cpu_set_t cpu_set;
+	CPU_ZERO(&cpu_set);
+	CPU_SET(0, &cpu_set);
+	if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set) != 0)
+	{
+		std::cerr << "Failed to set recv-thread affinity!\n";
+	}
+
 	std::clog << config::name << '\n';
 
 	if (!glfwInit())
