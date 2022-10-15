@@ -56,6 +56,19 @@ auto get_pkt_footer(const uint8_t* buffer, int offset) -> pkt_footer_t
 	return *reinterpret_cast<const pkt_footer_t*>(buffer + offset - sizeof(pkt_footer_t));
 }
 
+auto calculate_slice_bitmask(uint64_t pkt_bitmask) -> uint32_t
+{
+	constexpr auto pkts_in_slice_mask = (1U << num_pkts_per_slice) - 1U;
+	auto slice_bitmask = 0U;
+	for (auto i = 0; i < config::num_slices; i++)
+	{
+		const auto match = (pkt_bitmask & pkts_in_slice_mask) == pkts_in_slice_mask;
+		slice_bitmask |= (match << i);
+		pkt_bitmask >>= num_pkts_per_slice;
+	}
+	return slice_bitmask;
+}
+
 class stream_t
 {
 public:

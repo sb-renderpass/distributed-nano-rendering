@@ -269,6 +269,12 @@ auto main() -> int
 				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
 				log_stats(frame_time, result.stream_bitmask, result.stats[i]);
 			}
+			else
+			{
+				const auto pkt_bitmask = result.stats[i].pkt_bitmask;
+				const auto slice_bitmask = calculate_slice_bitmask(pkt_bitmask);
+				fmt::print("{:028b} {:04b}\n", pkt_bitmask, slice_bitmask);
+			}
 		}
 		if (result.stream_bitmask > 0) stream_bitmask_prev = result.stream_bitmask;
 		//fmt::print("Mask {:02b}\n", result.stream_bitmask);
