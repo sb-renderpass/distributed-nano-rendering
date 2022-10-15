@@ -20,6 +20,8 @@
 #include "types.hpp"
 #include "network.hpp"
 
+auto g_overlay_alpha = 0.0F;
+
 auto key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
 	if (action == GLFW_PRESS)
@@ -28,6 +30,9 @@ auto key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 		{
 			case GLFW_KEY_ESCAPE:
 				glfwSetWindowShouldClose(window, GLFW_TRUE);
+				break;
+			case GLFW_KEY_O:
+				g_overlay_alpha = g_overlay_alpha > 0.0F ? 0.0F : 0.5F;
 				break;
 		}
 	}
@@ -137,15 +142,26 @@ auto calculate_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> s
 	return cmds;
 }
 
-auto log_stats(float frame_time, uint32_t stream_bitmask, const stats_t& stats) -> void
+auto log_result(float frame_time, const stream_t::result_t& r) -> void
 {
 	constexpr auto target_frame_time = 1.0F / config::target_fps;
 	const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
+
 	fmt::print(
 		is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
-		"Mask {:02b} | Frame {:4.1f} | RTT {:5.1f} | Render {:5.1f} | Stream {:5.1f}\n",
-		stream_bitmask,
-		frame_time * 1e3, stats.pose_rtt_ns * 1e-6, stats.render_time_us * 1e-3, stats.stream_time_us * 1e-3);
+		" Frame {:4.1f} | Mask {:02b}\n",
+		frame_time * 1e3, r.stream_bitmask);
+
+	for (auto i = 0; i < config::num_streams; i++)
+	{
+		const auto is_incomplete_frame = r.stream_bitmask & (1 << i);
+		fmt::print(
+			is_incomplete_frame ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::orange),
+			"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f}\n",
+			i, r.stats[i].pose_rtt_ns * 1e-6, r.stats[i].render_time_us * 1e-3, r.stats[i].stream_time_us * 1e-3);
+	}
+
+	fmt::print("\n");
 }
 
 auto main() -> int
@@ -264,24 +280,25 @@ auto main() -> int
 		const auto result = stream.stop();
 		for (auto i = 0; i < config::num_streams; i++)
 		{
+			const auto pkt_bitmask = result.stats[i].pkt_bitmask;
 			if (result.stream_bitmask & (1U << i))
 			{
 				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
-				log_stats(frame_time, result.stream_bitmask, result.stats[i]);
 			}
 			else
 			{
-				const auto pkt_bitmask = result.stats[i].pkt_bitmask;
 				const auto slice_bitmask = calculate_slice_bitmask(pkt_bitmask);
-				fmt::print("{:028b} {:04b}\n", pkt_bitmask, slice_bitmask);
+				//fmt::print("{:028b} {:04b}\n", pkt_bitmask, slice_bitmask);
 			}
 		}
+		log_result(frame_time, result);
 		if (result.stream_bitmask > 0) stream_bitmask_prev = result.stream_bitmask;
 		//fmt::print("Mask {:02b}\n", result.stream_bitmask);
 
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);
 		glBindVertexArray(vao);
+		glUniform1f(0, g_overlay_alpha);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, instance_buffer);
 		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, num_active_streams_prev);
 

@@ -67,22 +67,30 @@ in VS_TO_FS
     flat int texture_id;
 } vs_to_fs;
 
+vec3 overlay_color[2] = vec3[](
+    vec3(1, 0, 1), // Magenta
+    vec3(0, 1, 1)  // Cyan
+);
+
 out vec4 out_color;
+
+layout(location = 0) uniform float u_overlay_alpha;
 
 layout(binding = 0) uniform usampler2DArray in_texture;
 
 vec3 unpack_rgb233(uint color)
 {
     return vec3(
-        (((color & 0xC0) >> 6) << 6) / 255.0,
-        (((color & 0x38) >> 3) << 5) / 255.0,
-        (((color & 0x07) >> 0) << 5) / 255.0);
+        (((color & 0xC0U) >> 6) << 6) / 255.0,
+        (((color & 0x38U) >> 3) << 5) / 255.0,
+        (((color & 0x07U) >> 0) << 5) / 255.0);
 }
 
 void main()
 {
     const vec3 color = unpack_rgb233(texture(in_texture, vec3(vs_to_fs.texcoord, vs_to_fs.texture_id)).r);
-    out_color = vec4(color, 1);
+    const vec3 final_color = mix(color, overlay_color[vs_to_fs.texture_id], u_overlay_alpha);
+    out_color = vec4(final_color, 1);
 }
 
 )glsl";
