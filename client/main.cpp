@@ -152,7 +152,7 @@ auto main() -> int
 {
 	cpu_set_t cpu_set;
 	CPU_ZERO(&cpu_set);
-	CPU_SET(0, &cpu_set);
+	CPU_SET(3, &cpu_set);
 	if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set) != 0)
 	{
 		std::cerr << "Failed to set recv-thread affinity!\n";
@@ -218,7 +218,8 @@ auto main() -> int
 	glCreateBuffers(1, &instance_buffer);
 	glNamedBufferStorage(instance_buffer, config::num_streams * sizeof(instance_t), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
-	stream_t stream {config::servers, &frame_buffers};
+	stream_t stream0 {{config::servers[0]}, &frame_buffers, 0};
+	stream_t stream1 {{config::servers[1]}, &frame_buffers, 1};
 
 	std::deque<double> frame_time_deque (10, 0);
 
@@ -247,7 +248,8 @@ auto main() -> int
 		pose.frame_num = frame_num++;
 		const auto cmds = calculate_render_commands(pose, stream_bitmask_prev);
 
-		stream.start(cmds);
+		stream0.start({cmds[0]});
+		stream1.start({cmds[1]});
 
 		// Only recalculate and update instance data when necessary
 		if (stream_bitmask_prev != stream_bitmask_last)
@@ -258,19 +260,20 @@ auto main() -> int
 		}
 
 		//using namespace std::chrono_literals;
-		//std::this_thread::sleep_for(33ms);
+		//std::this_thread::sleep_for(25ms);
 		std::this_thread::sleep_for(std::chrono::duration<float>(1.0F / config::target_fps));
 
-		const auto result = stream.stop();
+		const auto result0 = stream0.stop();
+		const auto result1 = stream1.stop();
 		for (auto i = 0; i < config::num_streams; i++)
 		{
-			if (result.stream_bitmask & (1U << i))
+			if (result0.stream_bitmask & (1U << i))
 			{
 				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
-				log_stats(frame_time, result.stream_bitmask, result.stats[i]);
+				//log_stats(frame_time, result0.stream_bitmask, result0.stats[i]);
 			}
 		}
-		if (result.stream_bitmask > 0) stream_bitmask_prev = result.stream_bitmask;
+		if (result0.stream_bitmask > 0) stream_bitmask_prev = result0.stream_bitmask;
 		//fmt::print("Mask {:02b}\n", result.stream_bitmask);
 
 		glUseProgram(program.handle);

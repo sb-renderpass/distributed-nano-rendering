@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <linux/filter.h>
 #include <unistd.h>
 
 #include <fmt/core.h>
@@ -69,7 +70,7 @@ public:
 
 	stream_t(
 		const std::vector<server_t>& server_addr,
-		std::vector<std::vector<uint8_t>>* frame_buffers);
+		std::vector<std::vector<uint8_t>>* frame_buffers, int stream_id);
 
 	auto start(const std::vector<render_command_t>& cmds) -> void;
 	auto stop() -> result_t;
@@ -91,6 +92,8 @@ private:
 	auto send_render_command(const render_command_t& cmd, int server_id) -> int;
 	auto recv_pkt() -> int;
 	auto recv_thread_task() -> void;
+
+	int stream_id {0};
 };
 
 stream_t::~stream_t()
@@ -100,11 +103,48 @@ stream_t::~stream_t()
 
 stream_t::stream_t(
 	const std::vector<server_t>& servers,
-	std::vector<std::vector<uint8_t>>* frame_buffers)
-	: frame_buffers {frame_buffers}
+	std::vector<std::vector<uint8_t>>* frame_buffers, int stream_id)
+	: frame_buffers {frame_buffers}, stream_id {stream_id}
 {
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0) throw std::runtime_error {"Failed to create stream socket!"};
+
+	constexpr auto flag = 1;
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag)) < 0)
+	{
+		std::cerr << "Failed to set SO_REUSEADDR! error=" << errno << '\n';
+		throw;
+	}
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &flag, sizeof(flag)) < 0)
+	{
+		std::cerr << "Failed to set SO_REUSEPORT! error=" << errno << '\n';
+		throw;
+	}
+	sock_filter bpf_code[] = {
+		{ 0x28, 0, 0, 0x00000000 },
+		{ 0x15, 0, 5,       3333 }, // udp.src_port == 3333
+		{ 0x28, 0, 0, 0x00000002 },
+		{ 0x15, 0, 3,       3333 }, // udp.dst_port == 3333
+		{ 0x28, 0, 0, 0x00000008 },
+		{ 0x15, 0, 1,          0 }, // stream_id == 0
+		{ 0x06, 0, 0, 0x00040000 },
+		{ 0x06, 0, 0, 0x00040001 },
+	};
+	const sock_fprog filter
+	{
+		.len = sizeof(bpf_code) / sizeof(bpf_code[0]),
+		.filter = bpf_code,
+	};
+	if (setsockopt(sock, SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, &filter, sizeof(filter)) < 0)
+	{
+		std::cerr << "Failed to set SO_ATTACH_REUSEPORT_CBPF! error=" << errno << '\n';
+		throw;
+	}
+	if (setsockopt(sock, SOL_SOCKET, SO_INCOMING_CPU, &stream_id, sizeof(stream_id)) < 0)
+	{
+		std::cerr << "Failed to set SO_INCOMING_CPU! error=" << errno << '\n';
+		throw;
+	}
 
 	//const auto recv_timeout = timeval { .tv_usec = timeout_us, };
 	//setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
@@ -112,7 +152,6 @@ stream_t::stream_t(
 	constexpr auto priority = 6 << 7;
 	setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
 
-	constexpr auto flag = 1;
 	setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
 
 	//constexpr auto rcvbuf_size = config::pkt_buffer_size;
@@ -135,7 +174,9 @@ stream_t::stream_t(
 	std::memset(&client_addr, 0, sizeof(client_addr));
 	client_addr.sin_family      = AF_INET;
 	client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	client_addr.sin_port        = htons(0);
+	//client_addr.sin_port        = htons(0);
+	//client_addr.sin_addr.s_addr = htonl(create_ip(192, 168, 12, 1));
+	client_addr.sin_port        = htons(3333);
 
 	if (bind(sock, reinterpret_cast<const sockaddr*>(&client_addr), sizeof(client_addr)) < 0)
 	{
@@ -148,7 +189,7 @@ stream_t::stream_t(
 
 	cpu_set_t cpu_set;
 	CPU_ZERO(&cpu_set);
-	CPU_SET(1, &cpu_set);
+	CPU_SET(stream_id, &cpu_set);
 	recv_thread = std::jthread {[this](){ recv_thread_task(); }};
 	if (pthread_setaffinity_np(recv_thread.native_handle(), sizeof(cpu_set), &cpu_set) != 0)
 	{
@@ -168,8 +209,10 @@ auto stream_t::stop() -> result_t
 	return std::exchange(result, {});
 }
 
-auto stream_t::send_render_command(const render_command_t& cmd, int server_id) -> int
+auto stream_t::send_render_command(const render_command_t& cmd_, int server_id) -> int
 {
+	auto cmd = cmd_;
+	cmd.pose.frame_num = stream_id;
 	const auto nbytes = sendto(sock, &cmd, sizeof(cmd), 0,
 		reinterpret_cast<const sockaddr*>(&server_addrs[server_id]), sizeof(server_addrs[server_id]));
 	if (nbytes < 0) std::cerr << "Failed to send pose!\n";
@@ -193,7 +236,8 @@ auto stream_t::recv_pkt() -> int
 		return -1;
 	}
 
-	return server_id_map.at(server_ip);
+	return server_ip == create_ip(192, 168, 12, 180) ? 0 : 1;
+	//return server_id_map.at(server_ip);
 }
 
 auto stream_t::recv_thread_task() -> void
@@ -203,6 +247,15 @@ auto stream_t::recv_thread_task() -> void
 	{
 		const auto server_id = recv_pkt();
 		if (drop_incoming_pkts.test() || server_id < 0) continue;
+
+		std::clog << "stream=" << stream_id << " pkt=" << server_id << " TID=" << sched_getcpu() << '\n';
+
+		/*
+		int cpu = 0;
+		socklen_t len = sizeof(cpu);
+		getsockopt(sock, SOL_SOCKET, SO_INCOMING_CPU, &cpu, &len);
+		std::clog << "stream=" << stream_id << ' ' << cpu << '\n';
+		*/
 
 		const auto header = unpack_pkt_header(pkt_buffer.data());
 		const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
