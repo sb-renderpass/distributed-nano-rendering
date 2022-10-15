@@ -15,6 +15,8 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <linux/filter.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 #include <unistd.h>
 
 #include <fmt/core.h>
@@ -135,14 +137,23 @@ stream_t::stream_t(
 		.len = sizeof(bpf_code) / sizeof(bpf_code[0]),
 		.filter = bpf_code,
 	};
+	/*
 	if (setsockopt(sock, SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, &filter, sizeof(filter)) < 0)
 	{
 		std::cerr << "Failed to set SO_ATTACH_REUSEPORT_CBPF! error=" << errno << '\n';
 		throw;
 	}
+	*/
 	if (setsockopt(sock, SOL_SOCKET, SO_INCOMING_CPU, &stream_id, sizeof(stream_id)) < 0)
 	{
 		std::cerr << "Failed to set SO_INCOMING_CPU! error=" << errno << '\n';
+		throw;
+	}
+
+	const auto device = stream_id == 0 ? "wlan1" : "ap0";
+	if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, device, strlen(device)) < 0)
+	{
+		std::cerr << "Failed to set SO_BINDTODEVICE! error=" << errno << '\n';
 		throw;
 	}
 
@@ -152,7 +163,7 @@ stream_t::stream_t(
 	constexpr auto priority = 6 << 7;
 	setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
 
-	setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
+	//setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
 
 	//constexpr auto rcvbuf_size = config::pkt_buffer_size;
 	//setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
