@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring> // memset
+#include <future>
 #include <iostream>
 #include <pthread.h>
 #include <thread>
@@ -32,6 +33,7 @@ constexpr auto num_pkts_per_frame  = num_pkts_per_slice * config::num_slices;
 constexpr auto last_seqnum         = num_pkts_per_frame - 1;
 constexpr auto last_pkt_bitmask    = (1ULL << last_seqnum);
 constexpr auto all_pkt_bitmask     = (1ULL << num_pkts_per_frame) - 1ULL;
+constexpr auto all_stream_bitmask  = (1U   << config::num_streams) - 1U;
 
 constexpr auto target_frame_time   = 1.0F / config::target_fps;
 constexpr auto timeout_us          = static_cast<int64_t>(target_frame_time * 1e6F);
@@ -84,7 +86,7 @@ public:
 		const std::vector<server_t>& server_addr,
 		std::vector<std::vector<uint8_t>>* frame_buffers);
 
-	auto start(const std::vector<render_command_t>& cmds) -> void;
+	auto start(const std::vector<render_command_t>& cmds) -> std::future<void>;
 	auto stop() -> result_t;
  
 private:
@@ -100,6 +102,7 @@ private:
 	std::unordered_map<uint32_t, int> server_id_map;
 	result_t result {};
 	uint32_t stream_bitmask {0};
+	std::promise<void> ready_promise;
 
 	auto send_render_command(const render_command_t& cmd, int server_id) -> int;
 	auto recv_pkt() -> int;
@@ -169,15 +172,17 @@ stream_t::stream_t(
 	}
 }
 
-auto stream_t::start(const std::vector<render_command_t>& cmds) -> void
+auto stream_t::start(const std::vector<render_command_t>& cmds) -> std::future<void>
 {
 	for (auto i = 0; i < cmds.size(); i++) send_render_command(cmds[i], i);
 	drop_incoming_pkts.clear();
+	return ready_promise.get_future();
 }
 
 auto stream_t::stop() -> result_t
 {
 	drop_incoming_pkts.test_and_set();
+	ready_promise = {};
 	return std::exchange(result, {});
 }
 
@@ -235,6 +240,9 @@ auto stream_t::recv_thread_task() -> void
 
 			result.stream_bitmask |= (1U << server_id);
 		}
+
+		// Early exit when all frames are received
+		if (result.stream_bitmask == all_stream_bitmask) ready_promise.set_value();
 	}
 }
 

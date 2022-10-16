@@ -243,12 +243,16 @@ auto main() -> int
 
 	auto ts_prev = glfwGetTime();
 
-	constexpr auto all_stream_bitmask = (1U << config::num_streams) - 1U;
 	std::deque<uint32_t> stream_bitmask_history (3, all_stream_bitmask);
 	auto filtered_stream_bitmask = stream_bitmask_history[1];
 
+	const auto preferred_frame_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::duration<float>(1.0F / config::target_fps));
+
 	while(!glfwWindowShouldClose(window))
 	{
+		const auto timeout = std::chrono::high_resolution_clock::now() + preferred_frame_time;
+
 		const auto ts_now = glfwGetTime();
 		const auto frame_time = ts_now - ts_prev;
 		frame_time_deque.pop_front();
@@ -268,7 +272,7 @@ auto main() -> int
 		pose.frame_num = frame_num++;
 		const auto cmds = calculate_render_commands(pose, filtered_stream_bitmask);
 
-		stream.start(cmds);
+		auto ready_future = stream.start(cmds);
 
 		// TODO: Optimize by only generating when necessary
 		const auto instance_data = create_instance_data(filtered_stream_bitmask);
@@ -277,9 +281,8 @@ auto main() -> int
 		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
 		glfwSetWindowTitle(window, title.data());
 
-		//using namespace std::chrono_literals;
-		//std::this_thread::sleep_for(33ms);
-		std::this_thread::sleep_for(std::chrono::duration<float>(1.0F / config::target_fps));
+		//std::this_thread::sleep_until(timeout);
+		ready_future.wait_until(timeout);
 
 		const auto result = stream.stop();
 		for (auto i = 0; i < config::num_streams; i++)
