@@ -243,8 +243,9 @@ auto main() -> int
 
 	auto ts_prev = glfwGetTime();
 
-	auto stream_bitmask_prev = (1U << config::num_streams) - 1U; // Start by assuming all streams are active
-	auto stream_bitmask_last = 0U;
+	constexpr auto all_stream_bitmask = (1U << config::num_streams) - 1U;
+	std::deque<uint32_t> stream_bitmask_history (3, all_stream_bitmask);
+	auto filtered_stream_bitmask = stream_bitmask_history[1];
 
 	while(!glfwWindowShouldClose(window))
 	{
@@ -255,23 +256,26 @@ auto main() -> int
 		const auto avg_frame_rate = frame_time_deque.size() / std::reduce(std::cbegin(frame_time_deque), std::cend(frame_time_deque));
 		ts_prev = ts_now;
 
-		const auto num_active_streams_prev = std::popcount(stream_bitmask_prev);
-		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams_prev);
-		glfwSetWindowTitle(window, title.data());
+		if (
+			stream_bitmask_history[0] != stream_bitmask_history[1] &&
+			stream_bitmask_history[1] == stream_bitmask_history[2])
+		{
+			filtered_stream_bitmask = stream_bitmask_history[1];
+		}
+		const auto num_active_streams = std::popcount(filtered_stream_bitmask);
 
 		update_pose(window, pose);
 		pose.frame_num = frame_num++;
-		const auto cmds = calculate_render_commands(pose, stream_bitmask_prev);
+		const auto cmds = calculate_render_commands(pose, filtered_stream_bitmask);
 
 		stream.start(cmds);
 
-		// Only recalculate and update instance data when necessary
-		if (stream_bitmask_prev != stream_bitmask_last)
-		{
-			const auto instance_data = create_instance_data(stream_bitmask_prev);
-			glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
-			stream_bitmask_last = stream_bitmask_prev;
-		}
+		// TODO: Optimize by only generating when necessary
+		const auto instance_data = create_instance_data(filtered_stream_bitmask);
+		glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
+
+		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
+		glfwSetWindowTitle(window, title.data());
 
 		//using namespace std::chrono_literals;
 		//std::this_thread::sleep_for(33ms);
@@ -292,15 +296,19 @@ auto main() -> int
 			}
 		}
 		log_result(frame_time, result);
-		if (result.stream_bitmask > 0) stream_bitmask_prev = result.stream_bitmask;
-		//fmt::print("Mask {:02b}\n", result.stream_bitmask);
+
+		if (result.stream_bitmask > 0)
+		{
+			stream_bitmask_history.pop_front();
+			stream_bitmask_history.push_back(result.stream_bitmask);
+		}
 
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);
 		glBindVertexArray(vao);
 		glUniform1f(0, g_overlay_alpha);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, instance_buffer);
-		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, num_active_streams_prev);
+		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, num_active_streams);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
