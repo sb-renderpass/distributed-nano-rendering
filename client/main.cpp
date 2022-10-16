@@ -245,6 +245,7 @@ auto main() -> int
 
 	std::deque<uint32_t> stream_bitmask_history (3, all_stream_bitmask);
 	auto filtered_stream_bitmask = stream_bitmask_history[1];
+	auto last_used_stream_bitmask = 0U;
 
 	const auto preferred_frame_time = std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::duration<float>(1.0F / config::target_fps));
@@ -274,9 +275,13 @@ auto main() -> int
 
 		auto ready_future = stream.start(cmds);
 
-		// TODO: Optimize by only generating when necessary
-		const auto instance_data = create_instance_data(filtered_stream_bitmask);
-		glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
+		// Only generate render data when necessary
+		if (last_used_stream_bitmask != filtered_stream_bitmask)
+		{
+			const auto instance_data = create_instance_data(filtered_stream_bitmask);
+			glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
+			last_used_stream_bitmask = filtered_stream_bitmask;
+		}
 
 		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
 		glfwSetWindowTitle(window, title.data());
