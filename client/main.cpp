@@ -154,11 +154,12 @@ auto log_result(float frame_time, const stream_t::result_t& r) -> void
 
 	for (auto i = 0; i < config::num_streams; i++)
 	{
-		const auto is_incomplete_frame = r.stream_bitmask & (1 << i);
-		fmt::print(
-			is_incomplete_frame ? fmt::fg(fmt::color::white) : fmt::fg(fmt::color::orange),
-			"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f}\n",
-			i, r.stats[i].pose_rtt_ns * 1e-6, r.stats[i].render_time_us * 1e-3, r.stats[i].stream_time_us * 1e-3);
+		if (r.stream_bitmask & (1 << i)) // Only log data for completed streams
+		{
+			fmt::print(
+				"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f}\n",
+				i, r.stats[i].pose_rtt_ns * 1e-6, r.stats[i].render_time_us * 1e-3, r.stats[i].stream_time_us * 1e-3);
+		}
 	}
 
 	fmt::print("\n");
@@ -288,8 +289,8 @@ auto main() -> int
 
 		//std::this_thread::sleep_until(timeout);
 		ready_future.wait_until(timeout);
-
 		const auto result = stream.stop();
+
 		for (auto i = 0; i < config::num_streams; i++)
 		{
 			const auto pkt_bitmask = result.stats[i].pkt_bitmask;
