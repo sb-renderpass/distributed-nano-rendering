@@ -306,7 +306,7 @@ auto main() -> int
 					pkt_bitmask, calculate_slice_bitmask(pkt_bitmask), result.stream_bitmask);
 			*/
 		}
-		log_result(frame_time, result);
+		//log_result(frame_time, result);
 
 		if (result.stream_bitmask > 0)
 		{

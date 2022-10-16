@@ -224,6 +224,46 @@ auto stream_t::recv_pkt() -> int
 	return server_id_map.at(server_ip);
 }
 
+auto test_slice_encode(int slice_index, uint8_t* fb) -> int
+{
+	constexpr auto W = config::height;
+	constexpr auto H = config::width / config::num_slices;
+	const auto slice_offset = slice_buffer_size * slice_index;
+	auto num_total_bits = 0;
+	for (auto i = 0; i < W; i++)
+	{
+		for (auto j = 0; j < H; j++)
+		{
+			//fb[slice_offset + i + j * W] = 0;
+			const uint8_t c = (i >  0 && j >   0) ? fb[slice_offset + (i - 1) + (j - 1) * W] : 0;
+			const uint8_t b = (i >  0 && j >  -1) ? fb[slice_offset + (i - 1) + (j + 0) * W] : 0;
+			const uint8_t d = (i >  0 && j < W-1) ? fb[slice_offset + (i - 1) + (j + 1) * W] : 0;
+			const uint8_t a = (i > -1 && j >   0) ? fb[slice_offset + (i + 0) + (j - 1) * W] : 0;
+			const uint8_t x = fb[slice_offset + i + j * W];
+
+			const auto [min_a_b, max_a_b] = std::minmax(a, b);
+			int32_t pred = (int)a + (int)b - (int)c;
+			if (c >= max_a_b) pred = (int)min_a_b;
+			else if (c <= min_a_b) pred = (int)max_a_b;
+
+			const auto res = (int)x - pred;
+
+			const uint32_t level = std::abs(d - b) + std::abs(b - c) + std::abs(c - a);
+			uint32_t k = 0U;
+			while ((3U << k) < level) { k++; }
+
+			const uint32_t x_ = (res >> 30) ^ (2 * res);
+			const auto high_bits = x_ >> k;
+
+			const auto num_enc_bits = (high_bits + 1) + k;
+			num_total_bits += num_enc_bits;
+		}
+	}
+	const auto cr = (float)num_total_bits / (slice_buffer_size * 8);
+	std::clog << cr << ' ' << slice_index << '\n';
+	return num_total_bits;
+}
+
 auto stream_t::recv_thread_task() -> void
 {
 	// TODO: Handle graceful exit
@@ -249,6 +289,15 @@ auto stream_t::recv_thread_task() -> void
 			result.stats[server_id].stream_time_us = footer.stream_time_us;
 
 			complete_stream_bitmask |= (1U << server_id);
+
+			// CODEC
+			auto num_total_bits = 0;
+			for (auto i = 0; i < config::num_slices; i++)
+			{
+				num_total_bits += test_slice_encode(i, (*frame_buffers)[server_id].data());
+			}
+			const auto cr = (float)num_total_bits / (frame_buffer_size * 8);
+			std::clog << cr << '\n';
 		}
 
 		// Early exit when all frames are received
