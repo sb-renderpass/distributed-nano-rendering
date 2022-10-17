@@ -9,7 +9,8 @@ constexpr auto shader_vs = R"glsl(
 out VS_TO_FS
 {
     vec2 texcoord;
-    flat uint texture_id;
+    float slice_overlay_alpha;
+    flat  uint texture_id;
 } vs_to_fs;
 
 // Hard-coded triangle-strip quad
@@ -20,9 +21,10 @@ vec2 quad_coords[4] = vec2[](
     vec2(1, 1)
 );
 
-layout(location = 0) uniform vec4 u_slice_render_data;
-layout(location = 1) uniform vec4 u_slice_texture_data;
-layout(location = 2) uniform  int u_num_slices;
+layout(location = 0) uniform  vec4 u_slice_render_data;
+layout(location = 1) uniform  vec4 u_slice_texture_data;
+layout(location = 2) uniform   int u_num_slices;
+layout(location = 3) uniform float u_slice_overlay_alpha;
 
 struct stream_render_t
 {
@@ -55,12 +57,13 @@ void main()
 
     const vec2 texcoord = (slice_texture_T * vec4(quad_coord, 0, 1)).st;
 
-    const uint slice_bitmask = stream_render_data[frame_id].slice_bitmask;
-    const uint select = (slice_bitmask >> slice_id) & 1;
-
-    gl_Position = slice_render_T * vec4(quad_coord, 0, select) * 2 - 1;
+    gl_Position = slice_render_T * vec4(quad_coord, 0, 1) * 2 - 1;
     vs_to_fs.texcoord = vec2(1 - texcoord.y, texcoord.x); // Transpose and flip texture
     vs_to_fs.texture_id = stream_render_data[frame_id].id;
+
+    const uint slice_bitmask = stream_render_data[frame_id].slice_bitmask;
+    const uint slice_present = (slice_bitmask >> slice_id) & 1U;
+    vs_to_fs.slice_overlay_alpha = mix(u_slice_overlay_alpha, 0.0F, slice_present);
 
     /*
     // Screen-space triangle
@@ -84,10 +87,13 @@ void main()
 constexpr auto shader_fs = R"glsl(
 #version 450 core
 
+#define SLICE_OVERLAY_COLOR vec3(1)
+
 in VS_TO_FS
 {
     vec2 texcoord;
-    flat uint texture_id;
+    float slice_overlay_alpha;
+    flat  uint texture_id;
 } vs_to_fs;
 
 vec3 overlay_color[2] = vec3[](
@@ -97,7 +103,7 @@ vec3 overlay_color[2] = vec3[](
 
 out vec4 out_color;
 
-layout(location = 3) uniform float u_overlay_alpha;
+layout(location = 4) uniform float u_stream_overlay_alpha;
 
 layout(binding = 0) uniform usampler2DArray in_texture;
 
@@ -112,7 +118,10 @@ vec3 unpack_rgb233(uint color)
 void main()
 {
     const vec3 color = unpack_rgb233(texture(in_texture, vec3(vs_to_fs.texcoord, vs_to_fs.texture_id)).r);
-    const vec3 final_color = mix(color, overlay_color[vs_to_fs.texture_id], u_overlay_alpha);
+    const vec3 final_color = mix(
+        mix(color, overlay_color[vs_to_fs.texture_id], u_stream_overlay_alpha),
+        SLICE_OVERLAY_COLOR,
+        vs_to_fs.slice_overlay_alpha);
     out_color = vec4(final_color, 1);
 }
 

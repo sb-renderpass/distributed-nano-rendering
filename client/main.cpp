@@ -21,7 +21,8 @@
 #include "types.hpp"
 #include "network.hpp"
 
-auto g_overlay_alpha = 0.0F;
+auto g_stream_overlay_alpha = 0.0F;
+auto g_slice_overlay_alpha  = 0.0F;
 
 auto key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
@@ -32,8 +33,11 @@ auto key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 			case GLFW_KEY_ESCAPE:
 				glfwSetWindowShouldClose(window, GLFW_TRUE);
 				break;
-			case GLFW_KEY_O:
-				g_overlay_alpha = g_overlay_alpha > 0.0F ? 0.0F : 0.5F;
+			case GLFW_KEY_1:
+				g_stream_overlay_alpha = g_stream_overlay_alpha > 0.0F ? 0.0F : 0.5F;
+				break;
+			case GLFW_KEY_2:
+				g_slice_overlay_alpha = g_slice_overlay_alpha > 0.0F ? 0.0F : 1.0F;
 				break;
 		}
 	}
@@ -250,23 +254,11 @@ auto main() -> int
 	uint16_t frame_num = 0;
 	auto pose = pose_t {0, frame_num, {22.0F, 11.05F}, {-1, 0}, {0, -1}};
 
-	struct history_t
-	{
-		uint32_t stream_bitmask {all_stream_bitmask};
-		std::array<uint32_t, config::num_streams> slice_bitmasks {};
-	};
-
-	std::deque<history_t> history (3);
-	for (auto&& h : history)
-	{
-		h.stream_bitmask = all_stream_bitmask;
-		std::fill(std::begin(h.slice_bitmasks), std::end(h.slice_bitmasks), all_slice_bitmask);
-	}
-	auto filtered_history    = history[1];
-	auto last_stream_bitmask = filtered_history.stream_bitmask;
+	uint32_t prev_stream_bitmask {all_stream_bitmask};
+	std::array<uint32_t, config::num_streams> prev_slice_bitmasks {};
+	std::fill(std::begin(prev_slice_bitmasks), std::end(prev_slice_bitmasks), all_slice_bitmask);
 
 	constexpr auto slice_texture_data = create_slice_texture_data();
-	auto slice_render_data = create_slice_render_data(all_stream_bitmask);
 
 	const auto preferred_frame_time = std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::duration<float>(1.0F / config::target_fps));
@@ -284,32 +276,19 @@ auto main() -> int
 		const auto avg_frame_rate = frame_time_deque.size() / std::reduce(std::cbegin(frame_time_deque), std::cend(frame_time_deque));
 		ts_prev = ts_now;
 
-		if (history[0].stream_bitmask != history[1].stream_bitmask &&
-			history[1].stream_bitmask == history[2].stream_bitmask)
-		{
-			filtered_history = history[1];
-		}
-		const auto num_active_streams = std::popcount(filtered_history.stream_bitmask);
-
 		update_pose(window, pose);
 		pose.frame_num = frame_num++;
-		const auto cmds = create_render_commands(pose, filtered_history.stream_bitmask);
+		const auto cmds = create_render_commands(pose, prev_stream_bitmask);
 
 		auto ready_future = stream.start(cmds);
 
-		// Only regenerate render data when necessary
-		if (last_stream_bitmask != filtered_history.stream_bitmask)
-		{
-			const auto stream_render_data = create_stream_render_data(
-				filtered_history.stream_bitmask, filtered_history.slice_bitmasks);
-			glNamedBufferSubData(
-				stream_render_buffer,
-				0, stream_render_data.size() * sizeof(stream_render_t),
-				stream_render_data.data());
-
-			slice_render_data = create_slice_render_data(filtered_history.stream_bitmask);
-			last_stream_bitmask = filtered_history.stream_bitmask;
-		}
+		const auto num_active_streams = std::popcount(prev_stream_bitmask);
+		const auto stream_render_data = create_stream_render_data(prev_stream_bitmask, prev_slice_bitmasks);
+		glNamedBufferSubData(
+			stream_render_buffer,
+			0, stream_render_data.size() * sizeof(stream_render_t),
+			stream_render_data.data());
+		const auto slice_render_data = create_slice_render_data(prev_stream_bitmask);
 
 		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
 		glfwSetWindowTitle(window, title.data());
@@ -324,24 +303,22 @@ auto main() -> int
 			/*
 			if (const auto pkt_bitmask = result.stats[i].pkt_bitmask;
 				pkt_bitmask != all_pkt_bitmask)
-				fmt::print("{:028b} {:04b}\n", pkt_bitmask, calculate_slice_bitmask(pkt_bitmask));
+				fmt::print("{:028b} {:04b} {:02b}\n",
+					pkt_bitmask, calculate_slice_bitmask(pkt_bitmask), result.stream_bitmask);
 			*/
 		}
 		log_result(frame_time, result);
 
 		if (result.stream_bitmask > 0)
 		{
-			std::array<uint32_t, config::num_streams> slice_bitmasks {};
+			prev_stream_bitmask = result.stream_bitmask;
 			std::transform(
 				std::cbegin(result.stats), std::cend(result.stats),
-				std::begin(slice_bitmasks),
+				std::begin(prev_slice_bitmasks),
 				[](const auto& s)
 				{
 					return calculate_slice_bitmask(s.pkt_bitmask);
 				});
-
-			history.pop_front();
-			history.push_back({result.stream_bitmask, slice_bitmasks});
 		}
 
 		glUseProgram(program.handle);
@@ -350,7 +327,8 @@ auto main() -> int
 		glUniform4fv(0, 1, glm::value_ptr(slice_render_data));
 		glUniform4fv(1, 1, glm::value_ptr(slice_texture_data));
 		glUniform1i(2, config::num_slices);
-		glUniform1f(3, g_overlay_alpha);
+		glUniform1f(3, g_slice_overlay_alpha);
+		glUniform1f(4, g_stream_overlay_alpha);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, stream_render_buffer);
 		glDrawElementsInstanced(
 			GL_TRIANGLE_STRIP,
