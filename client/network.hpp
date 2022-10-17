@@ -34,6 +34,7 @@ constexpr auto last_seqnum         = num_pkts_per_frame - 1;
 constexpr auto last_pkt_bitmask    = (1ULL << last_seqnum);
 constexpr auto all_pkt_bitmask     = (1ULL << num_pkts_per_frame) - 1ULL;
 constexpr auto all_stream_bitmask  = (1U   << config::num_streams) - 1U;
+constexpr auto all_slice_bitmask   = (1U   << config::num_slices ) - 1U;
 
 constexpr auto target_frame_time   = 1.0F / config::target_fps;
 constexpr auto timeout_us          = static_cast<int64_t>(target_frame_time * 1e6F);
@@ -92,7 +93,7 @@ public:
 private:
 	std::vector<std::vector<uint8_t>>* frame_buffers; 
 
-	int sock {0};
+	int sock {};
 	std::vector<sockaddr_in> server_addrs;
 	sockaddr_in client_addr;
 	std::jthread recv_thread;
@@ -101,7 +102,7 @@ private:
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
 	std::unordered_map<uint32_t, int> server_id_map;
 	result_t result {};
-	uint32_t stream_bitmask {0};
+	uint32_t complete_stream_bitmask {};
 	std::promise<void> ready_promise;
 
 	auto send_render_command(const render_command_t& cmd, int server_id) -> int;
@@ -174,6 +175,8 @@ stream_t::stream_t(
 
 auto stream_t::start(const std::vector<render_command_t>& cmds) -> std::future<void>
 {
+	complete_stream_bitmask = 0U; // Reset
+	result.stream_bitmask = all_stream_bitmask;
 	for (auto i = 0; i < cmds.size(); i++) send_render_command(cmds[i], i);
 	drop_incoming_pkts.clear();
 	return ready_promise.get_future();
@@ -183,6 +186,13 @@ auto stream_t::stop() -> result_t
 {
 	drop_incoming_pkts.test_and_set();
 	ready_promise = {};
+
+	// Mark missing streams
+	for (auto i = 0; i < config::num_streams; i++)
+	{
+		if (result.stats[i].pkt_bitmask == 0) result.stream_bitmask &= ~(1U << i);
+	}
+
 	return std::exchange(result, {});
 }
 
@@ -198,7 +208,7 @@ auto stream_t::recv_pkt() -> int
 {
 	struct sockaddr_in server_addr;
 	socklen_t server_addr_size = sizeof(server_addr);
-	std::memset(&server_addr, sizeof(server_addr), 0);
+	std::memset(&server_addr, 0, sizeof(server_addr));
 
 	const auto nbytes = recvfrom(
 		sock, pkt_buffer.data(), pkt_buffer.size(), 0,
@@ -238,11 +248,11 @@ auto stream_t::recv_thread_task() -> void
 			result.stats[server_id].render_time_us = footer.render_time_us;
 			result.stats[server_id].stream_time_us = footer.stream_time_us;
 
-			result.stream_bitmask |= (1U << server_id);
+			complete_stream_bitmask |= (1U << server_id);
 		}
 
 		// Early exit when all frames are received
-		if (result.stream_bitmask == all_stream_bitmask) ready_promise.set_value();
+		if (complete_stream_bitmask == all_stream_bitmask) ready_promise.set_value();
 	}
 }
 

@@ -109,16 +109,25 @@ auto create_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> std:
 	return cmds;
 }
 
-auto create_stream_ids_data(uint32_t stream_bitmask) -> std::vector<int>
+struct stream_render_t
 {
-	std::vector<int> stream_ids_data;
+	uint32_t id {};
+	uint32_t slice_bitmask {};
+};
+
+auto create_stream_render_data(
+	uint32_t stream_bitmask,
+	const std::array<uint32_t, config::num_streams>& slice_bitmasks
+) -> std::vector<stream_render_t>
+{
+	std::vector<stream_render_t> stream_render_data;
 	while (stream_bitmask > 0)
 	{
-		const auto stream_id = std::countr_zero(stream_bitmask);
-		stream_ids_data.push_back(stream_id);
+		const auto stream_id = static_cast<uint32_t>(std::countr_zero(stream_bitmask));
+		stream_render_data.push_back({stream_id, slice_bitmasks[stream_id]});
 		stream_bitmask &= ~(1U << stream_id);
 	}
-	return stream_ids_data;
+	return stream_render_data;
 }
 
 auto create_slice_render_data(uint32_t stream_bitmask) -> glm::vec4
@@ -226,10 +235,13 @@ auto main() -> int
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayElementBuffer(vao, ibo);
 
-	constexpr auto max_streams = 32; // 1 per bit in stream_bitmask
-	GLuint stream_ids_buffer {GL_NONE};
-	glCreateBuffers(1, &stream_ids_buffer);
-	glNamedBufferStorage(stream_ids_buffer, max_streams * sizeof(int), nullptr, GL_DYNAMIC_STORAGE_BIT);
+	GLuint stream_render_buffer {GL_NONE};
+	glCreateBuffers(1, &stream_render_buffer);
+	glNamedBufferStorage(
+		stream_render_buffer,
+		config::num_streams * sizeof(stream_render_t),
+		nullptr,
+		GL_DYNAMIC_STORAGE_BIT);
 
 	stream_t stream {config::servers, &frame_buffers};
 
@@ -238,9 +250,20 @@ auto main() -> int
 	uint16_t frame_num = 0;
 	auto pose = pose_t {0, frame_num, {22.0F, 11.05F}, {-1, 0}, {0, -1}};
 
-	std::deque<uint32_t> stream_bitmask_history (3, all_stream_bitmask);
-	auto filtered_stream_bitmask = stream_bitmask_history[1];
-	auto last_used_stream_bitmask = 0U;
+	struct history_t
+	{
+		uint32_t stream_bitmask {all_stream_bitmask};
+		std::array<uint32_t, config::num_streams> slice_bitmasks {};
+	};
+
+	std::deque<history_t> history (3);
+	for (auto&& h : history)
+	{
+		h.stream_bitmask = all_stream_bitmask;
+		std::fill(std::begin(h.slice_bitmasks), std::end(h.slice_bitmasks), all_slice_bitmask);
+	}
+	auto filtered_history    = history[1];
+	auto last_stream_bitmask = filtered_history.stream_bitmask;
 
 	constexpr auto slice_texture_data = create_slice_texture_data();
 	auto slice_render_data = create_slice_render_data(all_stream_bitmask);
@@ -261,28 +284,31 @@ auto main() -> int
 		const auto avg_frame_rate = frame_time_deque.size() / std::reduce(std::cbegin(frame_time_deque), std::cend(frame_time_deque));
 		ts_prev = ts_now;
 
-		if (
-			stream_bitmask_history[0] != stream_bitmask_history[1] &&
-			stream_bitmask_history[1] == stream_bitmask_history[2])
+		if (history[0].stream_bitmask != history[1].stream_bitmask &&
+			history[1].stream_bitmask == history[2].stream_bitmask)
 		{
-			filtered_stream_bitmask = stream_bitmask_history[1];
+			filtered_history = history[1];
 		}
-		const auto num_active_streams = std::popcount(filtered_stream_bitmask);
+		const auto num_active_streams = std::popcount(filtered_history.stream_bitmask);
 
 		update_pose(window, pose);
 		pose.frame_num = frame_num++;
-		const auto cmds = create_render_commands(pose, filtered_stream_bitmask);
+		const auto cmds = create_render_commands(pose, filtered_history.stream_bitmask);
 
 		auto ready_future = stream.start(cmds);
 
-		// Only generate render data when necessary
-		if (last_used_stream_bitmask != filtered_stream_bitmask)
+		// Only regenerate render data when necessary
+		if (last_stream_bitmask != filtered_history.stream_bitmask)
 		{
-			const auto stream_ids_data = create_stream_ids_data(filtered_stream_bitmask);
-			glNamedBufferSubData(stream_ids_buffer, 0, stream_ids_data.size() * sizeof(int), stream_ids_data.data());
+			const auto stream_render_data = create_stream_render_data(
+				filtered_history.stream_bitmask, filtered_history.slice_bitmasks);
+			glNamedBufferSubData(
+				stream_render_buffer,
+				0, stream_render_data.size() * sizeof(stream_render_t),
+				stream_render_data.data());
 
-			slice_render_data = create_slice_render_data(filtered_stream_bitmask);
-			last_used_stream_bitmask = filtered_stream_bitmask;
+			slice_render_data = create_slice_render_data(filtered_history.stream_bitmask);
+			last_stream_bitmask = filtered_history.stream_bitmask;
 		}
 
 		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
@@ -294,23 +320,28 @@ auto main() -> int
 
 		for (auto i = 0; i < config::num_streams; i++)
 		{
-			const auto pkt_bitmask = result.stats[i].pkt_bitmask;
-			if (result.stream_bitmask & (1U << i))
-			{
-				update_data(frame_buffer_texture, frame_buffers[i].data(), i);
-			}
-			else
-			{
-				const auto slice_bitmask = calculate_slice_bitmask(pkt_bitmask);
-				//fmt::print("{:028b} {:04b}\n", pkt_bitmask, slice_bitmask);
-			}
+			update_data(frame_buffer_texture, frame_buffers[i].data(), i);
+			/*
+			if (const auto pkt_bitmask = result.stats[i].pkt_bitmask;
+				pkt_bitmask != all_pkt_bitmask)
+				fmt::print("{:028b} {:04b}\n", pkt_bitmask, calculate_slice_bitmask(pkt_bitmask));
+			*/
 		}
 		log_result(frame_time, result);
 
 		if (result.stream_bitmask > 0)
 		{
-			stream_bitmask_history.pop_front();
-			stream_bitmask_history.push_back(result.stream_bitmask);
+			std::array<uint32_t, config::num_streams> slice_bitmasks {};
+			std::transform(
+				std::cbegin(result.stats), std::cend(result.stats),
+				std::begin(slice_bitmasks),
+				[](const auto& s)
+				{
+					return calculate_slice_bitmask(s.pkt_bitmask);
+				});
+
+			history.pop_front();
+			history.push_back({result.stream_bitmask, slice_bitmasks});
 		}
 
 		glUseProgram(program.handle);
@@ -320,7 +351,7 @@ auto main() -> int
 		glUniform4fv(1, 1, glm::value_ptr(slice_texture_data));
 		glUniform1i(2, config::num_slices);
 		glUniform1f(3, g_overlay_alpha);
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, stream_ids_buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, stream_render_buffer);
 		glDrawElementsInstanced(
 			GL_TRIANGLE_STRIP,
 			indices.size(),

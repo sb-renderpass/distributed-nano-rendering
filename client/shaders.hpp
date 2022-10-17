@@ -9,7 +9,7 @@ constexpr auto shader_vs = R"glsl(
 out VS_TO_FS
 {
     vec2 texcoord;
-    flat int texture_id;
+    flat uint texture_id;
 } vs_to_fs;
 
 // Hard-coded triangle-strip quad
@@ -24,9 +24,15 @@ layout(location = 0) uniform vec4 u_slice_render_data;
 layout(location = 1) uniform vec4 u_slice_texture_data;
 layout(location = 2) uniform  int u_num_slices;
 
-layout(binding = 0, std430) readonly buffer stream_id_buffer
+struct stream_render_t
 {
-    int stream_ids[];
+    uint id;
+    uint slice_bitmask;
+};
+
+layout(binding = 0, std430) readonly buffer stream_render_buffer
+{
+    stream_render_t stream_render_data[];
 };
 
 mat4 create_T(vec4 v, int i)
@@ -49,9 +55,12 @@ void main()
 
     const vec2 texcoord = (slice_texture_T * vec4(quad_coord, 0, 1)).st;
 
-    gl_Position = slice_render_T * vec4(quad_coord, 0, 1) * 2 - 1;
+    const uint slice_bitmask = stream_render_data[frame_id].slice_bitmask;
+    const uint select = (slice_bitmask >> slice_id) & 1;
+
+    gl_Position = slice_render_T * vec4(quad_coord, 0, select) * 2 - 1;
     vs_to_fs.texcoord = vec2(1 - texcoord.y, texcoord.x); // Transpose and flip texture
-    vs_to_fs.texture_id = stream_ids[frame_id];
+    vs_to_fs.texture_id = stream_render_data[frame_id].id;
 
     /*
     // Screen-space triangle
@@ -78,7 +87,7 @@ constexpr auto shader_fs = R"glsl(
 in VS_TO_FS
 {
     vec2 texcoord;
-    flat int texture_id;
+    flat uint texture_id;
 } vs_to_fs;
 
 vec3 overlay_color[2] = vec3[](
