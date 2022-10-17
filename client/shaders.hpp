@@ -13,42 +13,45 @@ out VS_TO_FS
 } vs_to_fs;
 
 // Hard-coded triangle-strip quad
-vec2 texcoords[4] = vec2[](
+vec2 quad_coords[4] = vec2[](
     vec2(0, 0),
     vec2(0, 1),
     vec2(1, 0),
     vec2(1, 1)
 );
 
-struct slice_render_data_t
+layout(location = 0) uniform vec4 u_slice_render_data;
+layout(location = 1) uniform vec4 u_slice_texture_data;
+layout(location = 2) uniform  int u_num_slices;
+
+layout(binding = 0, std430) readonly buffer stream_id_buffer
 {
-    mat4 transform;
+    int stream_ids[];
 };
 
-layout(binding=0, std430) readonly buffer slice_render_buffer
+mat4 create_T(vec4 v, int i)
 {
-    slice_render_data_t slice_render_data[];
-};
-
-struct slice_texture_data_t
-{
-    mat4 transform;
-};
-
-layout(binding=1, std430) readonly buffer slice_texture_buffer
-{
-    slice_texture_data_t slice_texture_data[];
-};
+    return mat4(
+        v.x, 0, 0, 0,
+        0, v.y, 0, 0,
+        0, 0, 0, 0,
+        v.z * i, v.w * i, 0, 1);
+}
 
 void main()
 {
-    const int stream_id = gl_InstanceID / 4;
-    const int slice_id  = gl_InstanceID % 4;
-    const vec2 texcoord = texcoords[gl_VertexID];
+    const int frame_id = gl_InstanceID / u_num_slices;
+    const int slice_id = gl_InstanceID % u_num_slices;
+    const vec2 quad_coord = quad_coords[gl_VertexID];
 
-    gl_Position = slice_render_data[gl_InstanceID].transform * vec4(texcoord, 0, 1) * 2 - 1;
-    vs_to_fs.texcoord = vec2(1 - texcoord.y, (texcoord.x + slice_id) * 0.25); // Transpose and flip texture
-    vs_to_fs.texture_id = stream_id;
+    const mat4 slice_render_T  = create_T(u_slice_render_data, gl_InstanceID);
+    const mat4 slice_texture_T = create_T(u_slice_texture_data, slice_id);
+
+    const vec2 texcoord = (slice_texture_T * vec4(quad_coord, 0, 1)).st;
+
+    gl_Position = slice_render_T * vec4(quad_coord, 0, 1) * 2 - 1;
+    vs_to_fs.texcoord = vec2(1 - texcoord.y, texcoord.x); // Transpose and flip texture
+    vs_to_fs.texture_id = stream_ids[frame_id];
 
     /*
     // Screen-space triangle
@@ -85,7 +88,7 @@ vec3 overlay_color[2] = vec3[](
 
 out vec4 out_color;
 
-layout(location = 0) uniform float u_overlay_alpha;
+layout(location = 3) uniform float u_overlay_alpha;
 
 layout(binding = 0) uniform usampler2DArray in_texture;
 

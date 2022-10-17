@@ -11,6 +11,7 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <fmt/core.h>
 #include <fmt/color.h>
 
@@ -108,79 +109,55 @@ auto create_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> std:
 	return cmds;
 }
 
-struct slice_render_data_t
+auto create_stream_ids_data(uint32_t stream_bitmask) -> std::vector<int>
 {
-	glm::mat4 transform {1};
-};
-
-auto create_slice_render_data(uint32_t stream_bitmask) -> std::vector<slice_render_data_t>
-{
-	const auto num_active_streams = std::popcount(stream_bitmask);
-	std::vector<slice_render_data_t> result (config::num_streams * config::num_slices);
-	const auto step = 1.0F / (num_active_streams * config::num_slices);
-	for (auto i = 0; i < result.size(); i++)
+	std::vector<int> stream_ids_data;
+	while (stream_bitmask > 0)
 	{
-		const auto scale_x  = step;
-		const auto scale_y  = 1.0F;
-		const auto offset_x = step * i;
-		const auto offset_y = 0.0F;
-		result[i].transform = {
-			scale_x, 0, 0, 0,
-			0, scale_y, 0, 0,
-			0, 0, 0, 0,
-			offset_x, offset_y, 0, 1,
-		};
+		const auto stream_id = std::countr_zero(stream_bitmask);
+		stream_ids_data.push_back(stream_id);
+		stream_bitmask &= ~(1U << stream_id);
 	}
-	return result;
+	return stream_ids_data;
 }
 
-struct slice_texture_data_t
-{
-	glm::mat4 transform {1};
-};
-
-auto create_slice_texture_data(uint32_t stream_bitmask) -> std::vector<slice_texture_data_t>
+auto create_slice_render_data(uint32_t stream_bitmask) -> glm::vec4
 {
 	const auto num_active_streams = std::popcount(stream_bitmask);
-	std::vector<slice_texture_data_t> result (config::num_slices);
-	const auto step = 1.0F / (config::num_slices);
-	for (auto i = 0; i < result.size(); i++)
-	{
-		const auto scale_x  = step;
-		const auto scale_y  = 1.0F;
-		const auto offset_x = step * i;
-		const auto offset_y = 0.0F;
-		result[i].transform = {
-			scale_x, 0, 0, 0,
-			0, scale_y, 0, 0,
-			0, 0, 0, 0,
-			offset_x, offset_y, 0, 1,
-		};
-	}
-	return result;
+	const auto step = 1.0F / (num_active_streams * config::num_slices);
+	return {step, 1.0F, step, 0.0F};
+}
+
+constexpr auto create_slice_texture_data() -> glm::vec4
+{
+	constexpr auto step = 1.0F / config::num_slices;
+	return {step, 1.0F, step, 0.0F};
 }
 
 auto log_result(float frame_time, const stream_t::result_t& r) -> void
 {
-	constexpr auto target_frame_time = 1.0F / config::target_fps;
-	const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
-
-	fmt::print(
-		is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
-		" Frame {:4.1f} | Mask {:02b}\n",
-		frame_time * 1e3, r.stream_bitmask);
-
-	for (auto i = 0; i < config::num_streams; i++)
+	if (r.stream_bitmask > 0)
 	{
-		if (r.stream_bitmask & (1 << i)) // Only log data for completed streams
-		{
-			fmt::print(
-				"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f}\n",
-				i, r.stats[i].pose_rtt_ns * 1e-6, r.stats[i].render_time_us * 1e-3, r.stats[i].stream_time_us * 1e-3);
-		}
-	}
+		constexpr auto target_frame_time = 1.0F / config::target_fps;
+		const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
 
-	fmt::print("\n");
+		fmt::print(
+			is_latency_high ? fmt::fg(fmt::color::red) : fmt::fg(fmt::color::white),
+			" Frame {:4.1f} | Mask {:02b}\n",
+			frame_time * 1e3, r.stream_bitmask);
+
+		for (auto i = 0; i < config::num_streams; i++)
+		{
+			if (r.stream_bitmask & (1 << i)) // Only log data for completed streams
+			{
+				fmt::print(
+					"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f}\n",
+					i, r.stats[i].pose_rtt_ns * 1e-6, r.stats[i].render_time_us * 1e-3, r.stats[i].stream_time_us * 1e-3);
+			}
+		}
+
+		fmt::print("\n");
+	}
 }
 
 auto main() -> int
@@ -249,21 +226,10 @@ auto main() -> int
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayElementBuffer(vao, ibo);
 
-	GLuint slice_render_buffer {GL_NONE};
-	glCreateBuffers(1, &slice_render_buffer);
-	glNamedBufferStorage(
-		slice_render_buffer,
-		config::num_streams * config::num_slices * sizeof(slice_render_data_t),
-		nullptr,
-		GL_DYNAMIC_STORAGE_BIT);
-
-	GLuint slice_texture_buffer {GL_NONE};
-	glCreateBuffers(1, &slice_texture_buffer);
-	glNamedBufferStorage(
-		slice_texture_buffer,
-		config::num_slices * sizeof(slice_texture_data_t),
-		nullptr,
-		GL_DYNAMIC_STORAGE_BIT);
+	constexpr auto max_streams = 32; // 1 per bit in stream_bitmask
+	GLuint stream_ids_buffer {GL_NONE};
+	glCreateBuffers(1, &stream_ids_buffer);
+	glNamedBufferStorage(stream_ids_buffer, max_streams * sizeof(int), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
 	stream_t stream {config::servers, &frame_buffers};
 
@@ -272,14 +238,17 @@ auto main() -> int
 	uint16_t frame_num = 0;
 	auto pose = pose_t {0, frame_num, {22.0F, 11.05F}, {-1, 0}, {0, -1}};
 
-	auto ts_prev = glfwGetTime();
-
 	std::deque<uint32_t> stream_bitmask_history (3, all_stream_bitmask);
 	auto filtered_stream_bitmask = stream_bitmask_history[1];
 	auto last_used_stream_bitmask = 0U;
 
+	constexpr auto slice_texture_data = create_slice_texture_data();
+	auto slice_render_data = create_slice_render_data(all_stream_bitmask);
+
 	const auto preferred_frame_time = std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::duration<float>(1.0F / config::target_fps));
+
+	auto ts_prev = glfwGetTime();
 
 	while(!glfwWindowShouldClose(window))
 	{
@@ -307,20 +276,12 @@ auto main() -> int
 		auto ready_future = stream.start(cmds);
 
 		// Only generate render data when necessary
-		//if (last_used_stream_bitmask != filtered_stream_bitmask)
+		if (last_used_stream_bitmask != filtered_stream_bitmask)
 		{
-			const auto slice_render_data = create_slice_render_data(filtered_stream_bitmask);
-			glNamedBufferSubData(
-				slice_render_buffer,
-				0, slice_render_data.size() * sizeof(slice_render_data_t),
-				slice_render_data.data());
+			const auto stream_ids_data = create_stream_ids_data(filtered_stream_bitmask);
+			glNamedBufferSubData(stream_ids_buffer, 0, stream_ids_data.size() * sizeof(int), stream_ids_data.data());
 
-			const auto slice_texture_data = create_slice_texture_data(filtered_stream_bitmask);
-			glNamedBufferSubData(
-				slice_texture_buffer,
-				0, slice_texture_data.size() * sizeof(slice_texture_data_t),
-				slice_texture_data.data());
-
+			slice_render_data = create_slice_render_data(filtered_stream_bitmask);
 			last_used_stream_bitmask = filtered_stream_bitmask;
 		}
 
@@ -355,10 +316,17 @@ auto main() -> int
 		glUseProgram(program.handle);
 		glBindTextureUnit(0, frame_buffer_texture.handle);
 		glBindVertexArray(vao);
-		glUniform1f(0, g_overlay_alpha);
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, slice_render_buffer);
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, slice_texture_buffer);
-		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, 2 * 4);
+		glUniform4fv(0, 1, glm::value_ptr(slice_render_data));
+		glUniform4fv(1, 1, glm::value_ptr(slice_texture_data));
+		glUniform1i(2, config::num_slices);
+		glUniform1f(3, g_overlay_alpha);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, stream_ids_buffer);
+		glDrawElementsInstanced(
+			GL_TRIANGLE_STRIP,
+			indices.size(),
+			GL_UNSIGNED_INT,
+			nullptr,
+			num_active_streams * config::num_slices);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
