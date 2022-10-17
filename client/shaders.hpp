@@ -20,24 +20,35 @@ vec2 texcoords[4] = vec2[](
     vec2(1, 1)
 );
 
-struct instance_t
+struct slice_render_data_t
 {
     mat4 transform;
-    int  texture_id;
-	int  padding[3];
 };
 
-layout(binding=0, std430) readonly buffer instance_data
+layout(binding=0, std430) readonly buffer slice_render_buffer
 {
-    instance_t instance[];
+    slice_render_data_t slice_render_data[];
+};
+
+struct slice_texture_data_t
+{
+    mat4 transform;
+};
+
+layout(binding=1, std430) readonly buffer slice_texture_buffer
+{
+    slice_texture_data_t slice_texture_data[];
 };
 
 void main()
 {
+    const int stream_id = gl_InstanceID / 4;
+    const int slice_id  = gl_InstanceID % 4;
     const vec2 texcoord = texcoords[gl_VertexID];
-    gl_Position = instance[gl_InstanceID].transform * vec4(texcoord, 0, 1) * 2 - 1;
-    vs_to_fs.texcoord = vec2(1 - texcoord.y, texcoord.x); // Transpose and flip texture
-    vs_to_fs.texture_id = instance[gl_InstanceID].texture_id;
+
+    gl_Position = slice_render_data[gl_InstanceID].transform * vec4(texcoord, 0, 1) * 2 - 1;
+    vs_to_fs.texcoord = vec2(1 - texcoord.y, (texcoord.x + slice_id) * 0.25); // Transpose and flip texture
+    vs_to_fs.texture_id = stream_id;
 
     /*
     // Screen-space triangle

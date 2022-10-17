@@ -75,41 +75,7 @@ auto update_pose(GLFWwindow* window, pose_t& pose) -> void
 	pose.timestamp = get_timestamp_ns();
 }
 
-struct instance_t
-{
-	glm::mat4 transform {1};
-	int texture_id {0};
-	int padding[3];
-};
-
-auto create_instance_data(uint32_t stream_bitmask) -> std::vector<instance_t>
-{
-	const auto num_active_streams = std::popcount(stream_bitmask);
-	std::vector<instance_t> instance_data (num_active_streams, instance_t {});
-	const auto step = 1.0F / num_active_streams;
-	for (auto i = 0; i < instance_data.size(); i++)
-	{
-		const auto scale_x  = step;
-		const auto scale_y  = 1.0F;
-		const auto offset_x = step * i;
-		const auto offset_y = 0.0F;
-		const auto texture_id = std::countr_zero(stream_bitmask);
-		instance_data[i] =
-		{
-			.transform = glm::mat4 {
-				scale_x, 0, 0, 0,
-				0, scale_y, 0, 0,
-				0, 0, 0, 0,
-				offset_x, offset_y, 0, 1,
-			},
-			.texture_id = texture_id,
-		};
-		stream_bitmask &= ~(1U << texture_id);
-	}
-	return instance_data;
-}
-
-auto calculate_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> std::vector<render_command_t>
+auto create_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> std::vector<render_command_t>
 {
 	const auto num_active_streams = std::popcount(stream_bitmask);
 	std::vector<render_command_t> cmds (config::num_streams);
@@ -140,6 +106,58 @@ auto calculate_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> s
 		}
 	}
 	return cmds;
+}
+
+struct slice_render_data_t
+{
+	glm::mat4 transform {1};
+};
+
+auto create_slice_render_data(uint32_t stream_bitmask) -> std::vector<slice_render_data_t>
+{
+	const auto num_active_streams = std::popcount(stream_bitmask);
+	std::vector<slice_render_data_t> result (config::num_streams * config::num_slices);
+	const auto step = 1.0F / (num_active_streams * config::num_slices);
+	for (auto i = 0; i < result.size(); i++)
+	{
+		const auto scale_x  = step;
+		const auto scale_y  = 1.0F;
+		const auto offset_x = step * i;
+		const auto offset_y = 0.0F;
+		result[i].transform = {
+			scale_x, 0, 0, 0,
+			0, scale_y, 0, 0,
+			0, 0, 0, 0,
+			offset_x, offset_y, 0, 1,
+		};
+	}
+	return result;
+}
+
+struct slice_texture_data_t
+{
+	glm::mat4 transform {1};
+};
+
+auto create_slice_texture_data(uint32_t stream_bitmask) -> std::vector<slice_texture_data_t>
+{
+	const auto num_active_streams = std::popcount(stream_bitmask);
+	std::vector<slice_texture_data_t> result (config::num_slices);
+	const auto step = 1.0F / (config::num_slices);
+	for (auto i = 0; i < result.size(); i++)
+	{
+		const auto scale_x  = step;
+		const auto scale_y  = 1.0F;
+		const auto offset_x = step * i;
+		const auto offset_y = 0.0F;
+		result[i].transform = {
+			scale_x, 0, 0, 0,
+			0, scale_y, 0, 0,
+			0, 0, 0, 0,
+			offset_x, offset_y, 0, 1,
+		};
+	}
+	return result;
 }
 
 auto log_result(float frame_time, const stream_t::result_t& r) -> void
@@ -231,9 +249,21 @@ auto main() -> int
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayElementBuffer(vao, ibo);
 
-	GLuint instance_buffer {GL_NONE};
-	glCreateBuffers(1, &instance_buffer);
-	glNamedBufferStorage(instance_buffer, config::num_streams * sizeof(instance_t), nullptr, GL_DYNAMIC_STORAGE_BIT);
+	GLuint slice_render_buffer {GL_NONE};
+	glCreateBuffers(1, &slice_render_buffer);
+	glNamedBufferStorage(
+		slice_render_buffer,
+		config::num_streams * config::num_slices * sizeof(slice_render_data_t),
+		nullptr,
+		GL_DYNAMIC_STORAGE_BIT);
+
+	GLuint slice_texture_buffer {GL_NONE};
+	glCreateBuffers(1, &slice_texture_buffer);
+	glNamedBufferStorage(
+		slice_texture_buffer,
+		config::num_slices * sizeof(slice_texture_data_t),
+		nullptr,
+		GL_DYNAMIC_STORAGE_BIT);
 
 	stream_t stream {config::servers, &frame_buffers};
 
@@ -272,15 +302,25 @@ auto main() -> int
 
 		update_pose(window, pose);
 		pose.frame_num = frame_num++;
-		const auto cmds = calculate_render_commands(pose, filtered_stream_bitmask);
+		const auto cmds = create_render_commands(pose, filtered_stream_bitmask);
 
 		auto ready_future = stream.start(cmds);
 
 		// Only generate render data when necessary
-		if (last_used_stream_bitmask != filtered_stream_bitmask)
+		//if (last_used_stream_bitmask != filtered_stream_bitmask)
 		{
-			const auto instance_data = create_instance_data(filtered_stream_bitmask);
-			glNamedBufferSubData(instance_buffer, 0, instance_data.size() * sizeof(instance_data[0]), instance_data.data());
+			const auto slice_render_data = create_slice_render_data(filtered_stream_bitmask);
+			glNamedBufferSubData(
+				slice_render_buffer,
+				0, slice_render_data.size() * sizeof(slice_render_data_t),
+				slice_render_data.data());
+
+			const auto slice_texture_data = create_slice_texture_data(filtered_stream_bitmask);
+			glNamedBufferSubData(
+				slice_texture_buffer,
+				0, slice_texture_data.size() * sizeof(slice_texture_data_t),
+				slice_texture_data.data());
+
 			last_used_stream_bitmask = filtered_stream_bitmask;
 		}
 
@@ -316,8 +356,9 @@ auto main() -> int
 		glBindTextureUnit(0, frame_buffer_texture.handle);
 		glBindVertexArray(vao);
 		glUniform1f(0, g_overlay_alpha);
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, instance_buffer);
-		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, num_active_streams);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, slice_render_buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, slice_texture_buffer);
+		glDrawElementsInstanced(GL_TRIANGLE_STRIP, indices.size(), GL_UNSIGNED_INT, 0, 2 * 4);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
