@@ -239,13 +239,8 @@ auto main() -> int
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayElementBuffer(vao, ibo);
 
-	GLuint stream_render_buffer {GL_NONE};
-	glCreateBuffers(1, &stream_render_buffer);
-	glNamedBufferStorage(
-		stream_render_buffer,
-		config::num_streams * sizeof(stream_render_t),
-		nullptr,
-		GL_DYNAMIC_STORAGE_BIT);
+	const auto stream_render_buffer = gl::create_buffer<stream_render_t>(config::num_streams);
+	gl::bind_buffer(stream_render_buffer, 0);
 
 	stream_t stream {config::servers, &frame_buffers};
 
@@ -284,10 +279,14 @@ auto main() -> int
 
 		const auto num_active_streams = std::popcount(prev_stream_bitmask);
 		const auto stream_render_data = create_stream_render_data(prev_stream_bitmask, prev_slice_bitmasks);
+		gl::update_data(
+			stream_render_buffer, stream_render_data.data(), stream_render_data.size());
+		/*
 		glNamedBufferSubData(
 			stream_render_buffer,
 			0, stream_render_data.size() * sizeof(stream_render_t),
 			stream_render_data.data());
+		*/
 		const auto slice_render_data = create_slice_render_data(prev_stream_bitmask);
 
 		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
@@ -299,7 +298,7 @@ auto main() -> int
 
 		for (auto i = 0; i < config::num_streams; i++)
 		{
-			update_data(frame_buffer_texture, frame_buffers[i].data(), i);
+			gl::update_data(frame_buffer_texture, frame_buffers[i].data(), i);
 			/*
 			if (const auto pkt_bitmask = result.stats[i].pkt_bitmask;
 				pkt_bitmask != all_pkt_bitmask)
@@ -329,7 +328,6 @@ auto main() -> int
 		glUniform1i(2, config::num_slices);
 		glUniform1f(3, g_slice_overlay_alpha);
 		glUniform1f(4, g_stream_overlay_alpha);
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, stream_render_buffer);
 		glDrawElementsInstanced(
 			GL_TRIANGLE_STRIP,
 			indices.size(),

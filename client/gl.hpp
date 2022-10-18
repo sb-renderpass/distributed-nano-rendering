@@ -91,7 +91,8 @@ struct texture_t
 	texel_t texel;
 };
 
-auto update_data(const texture_t& texture, const uint8_t* data, int layer=0) -> void
+template <typename T = uint8_t>
+auto update_data(const texture_t& texture, const T* data, int layer = 0) -> void
 {
 	if (data)
 	{
@@ -162,7 +163,10 @@ public:
 
 		if (data)
 		{
-			for (auto i = 0; i < depth; i++) update_data(texture, data, i); // Set same data for all layers
+			for (auto i = 0; i < depth; i++)
+			{
+				update_data(texture, data, i); // Set same data for all layers
+			}
 		}
 
 		texture.texel = {GL_RED_INTEGER, GL_UNSIGNED_BYTE};
@@ -176,6 +180,35 @@ private:
 	const uint8_t* data {nullptr};
 	GLenum type {GL_TEXTURE_2D};
 };
+
+struct buffer_t
+{
+	GLuint handle {GL_NONE};
+};
+
+template <typename T = uint8_t>
+auto create_buffer(int capacity, T* data = nullptr) -> buffer_t
+{
+	buffer_t buffer;
+	glCreateBuffers(1, &buffer.handle);
+	glNamedBufferStorage(
+		buffer.handle,
+		capacity * sizeof(T),
+		data,
+		GL_DYNAMIC_STORAGE_BIT);
+	return buffer;
+}
+
+template <typename T = uint8_t>
+auto update_data(const buffer_t& buffer, const T* data, int size, int offset = 0) -> void
+{
+	glNamedBufferSubData(buffer.handle, offset, size * sizeof(T), data);
+}
+
+auto bind_buffer(const buffer_t& buffer, int binding) -> void
+{
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, buffer.handle);
+}
 
 auto debug_message_callback(
     GLenum, GLenum type, uint32_t, GLenum, GLsizei, const char* msg, const void*) -> void
