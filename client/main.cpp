@@ -24,7 +24,7 @@
 auto g_stream_overlay_alpha = 0.0F;
 auto g_slice_overlay_alpha  = 0.0F;
 
-auto key_callback(GLFWwindow* window, int key, int scancode, int action, int mode)
+auto key_callback(GLFWwindow* window, int key, int, int action, int) -> void
 {
 	if (action == GLFW_PRESS)
 	{

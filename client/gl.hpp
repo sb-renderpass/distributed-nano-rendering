@@ -178,13 +178,7 @@ private:
 };
 
 auto debug_message_callback(
-	GLenum source,
-	GLenum type,
-	unsigned int id,
-	GLenum severity,
-	GLsizei length,
-	const char* msg,
-	const void*) -> void
+    GLenum, GLenum type, uint32_t, GLenum, GLsizei, const char* msg, const void*) -> void
 {
 	if (type == GL_DEBUG_TYPE_ERROR)
 		std::cerr << "GL: " << msg << '\n';

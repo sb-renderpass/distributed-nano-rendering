@@ -54,4 +54,3 @@ struct stats_t
 	uint32_t render_time_us {0};
 	uint32_t stream_time_us {0};
 };
-

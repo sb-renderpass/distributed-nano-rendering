@@ -255,4 +255,3 @@ auto stream_t::recv_thread_task() -> void
 		if (complete_stream_bitmask == all_stream_bitmask) ready_promise.set_value();
 	}
 }
-

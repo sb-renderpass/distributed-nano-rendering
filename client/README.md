@@ -6,6 +6,7 @@
 - [vcpkg](https://vcpkg.io/en/index.html)
 - C++20 compiler
 - OpenGL 4.6 capable GPU
+- Linux OS
 
 ```
 $ vcpkg install glfw3 glad glm fmt

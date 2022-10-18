@@ -56,3 +56,15 @@ Name=Clang
 
 [Project]
 VersionControlSupport=kdevgit
+
+[SourceFormatter]
+OverrideKateIndentation=true
+UseDefault=false
+text/x-c++hdr=kdevcustomscript||clang_format
+text/x-c++src=kdevcustomscript||clang_format
+text/x-chdr=kdevcustomscript||clang_format
+text/x-csharp=kdevcustomscript||GNU_indent_GNU
+text/x-csrc=kdevcustomscript||clang_format
+text/x-java=kdevcustomscript||GNU_indent_GNU
+text/x-objc++src=kdevcustomscript||GNU_indent_GNU
+text/x-objcsrc=kdevcustomscript||GNU_indent_GNU
