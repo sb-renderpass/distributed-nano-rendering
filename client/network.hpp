@@ -224,44 +224,61 @@ auto stream_t::recv_pkt() -> int
 	return server_id_map.at(server_ip);
 }
 
-auto test_slice_encode(int slice_index, uint8_t* fb) -> int
+auto test_slice_encode(int slice_index, uint8_t* fb) -> std::vector<uint8_t>
 {
+	std::vector<uint8_t> bitstream;
+	uint8_t mem = 0;
+	auto mem_count = 0;
+
 	constexpr auto W = config::height;
 	constexpr auto H = config::width / config::num_slices;
 	const auto slice_offset = slice_buffer_size * slice_index;
-	auto num_total_bits = 0;
+
 	for (auto i = 0; i < W; i++)
 	{
 		for (auto j = 0; j < H; j++)
 		{
 			//fb[slice_offset + i + j * W] = 0;
-			const uint8_t c = (i >  0 && j >   0) ? fb[slice_offset + (i - 1) + (j - 1) * W] : 0;
-			const uint8_t b = (i >  0 && j >  -1) ? fb[slice_offset + (i - 1) + (j + 0) * W] : 0;
-			const uint8_t d = (i >  0 && j < W-1) ? fb[slice_offset + (i - 1) + (j + 1) * W] : 0;
-			const uint8_t a = (i > -1 && j >   0) ? fb[slice_offset + (i + 0) + (j - 1) * W] : 0;
-			const uint8_t x = fb[slice_offset + i + j * W];
+			const int c = (i >  0 && j >   0) ? fb[slice_offset + (i - 1) + (j - 1) * W] : 0;
+			const int b = (i >  0 && j >  -1) ? fb[slice_offset + (i - 1) + (j + 0) * W] : 0;
+			const int d = (i >  0 && j < W-1) ? fb[slice_offset + (i - 1) + (j + 1) * W] : 0;
+			const int a = (i > -1 && j >   0) ? fb[slice_offset + (i + 0) + (j - 1) * W] : 0;
+			const int x = fb[slice_offset + i + j * W];
 
 			const auto [min_a_b, max_a_b] = std::minmax(a, b);
-			int32_t pred = (int)a + (int)b - (int)c;
-			if (c >= max_a_b) pred = (int)min_a_b;
-			else if (c <= min_a_b) pred = (int)max_a_b;
+			auto pred = a + b - c;
+			if (c >= max_a_b) pred = min_a_b;
+			else if (c <= min_a_b) pred = max_a_b;
 
-			const auto res = (int)x - pred;
+			const auto resd = x - pred;
 
-			const uint32_t level = std::abs(d - b) + std::abs(b - c) + std::abs(c - a);
-			uint32_t k = 0U;
-			while ((3U << k) < level) { k++; }
+			const auto level = std::abs(d - b) + std::abs(b - c) + std::abs(c - a);
+			auto k = 0;
+			while ((3 << k) < level) { k++; }
 
-			const uint32_t x_ = (res >> 30) ^ (2 * res);
+			const uint32_t x_ = (resd >> 30) ^ (2 * resd);
 			const auto high_bits = x_ >> k;
+			const auto tmp_bits = (uint64_t)x_ & ((1ULL << (uint64_t)k) - 1ULL);
+			uint64_t enc_value = (1ULL << high_bits) | ((tmp_bits) << k);
+			auto enc_count = high_bits + 1 + k;
 
-			const auto num_enc_bits = (high_bits + 1) + k;
-			num_total_bits += num_enc_bits;
+            while (enc_count > 0)
+            {
+                mem = (mem << 1) | (enc_value & 1);
+                enc_value >>= 1;
+                enc_count--;
+                mem_count++;
+                if (mem_count == 8)
+                {
+                    bitstream.push_back(mem);
+                    mem = 0;
+                    mem_count = 0;
+                }
+			}
 		}
 	}
-	const auto cr = (float)num_total_bits / (slice_buffer_size * 8);
-	std::clog << cr << ' ' << slice_index << '\n';
-	return num_total_bits;
+
+	return bitstream;
 }
 
 auto stream_t::recv_thread_task() -> void
@@ -291,13 +308,18 @@ auto stream_t::recv_thread_task() -> void
 			complete_stream_bitmask |= (1U << server_id);
 
 			// CODEC
-			auto num_total_bits = 0;
+			auto num_total_bytes = 0;
 			for (auto i = 0; i < config::num_slices; i++)
 			{
-				num_total_bits += test_slice_encode(i, (*frame_buffers)[server_id].data());
+				const auto bitstream = test_slice_encode(i, (*frame_buffers)[server_id].data());
+				const auto cr = (float)bitstream.size() / slice_buffer_size;
+				std::clog << cr << ' ' << i << '\n';
+
+				num_total_bytes += bitstream.size();
 			}
-			const auto cr = (float)num_total_bits / (frame_buffer_size * 8);
+			const auto cr = (float)num_total_bytes / frame_buffer_size;
 			std::clog << cr << '\n';
+			std::clog << "----------\n";
 		}
 
 		// Early exit when all frames are received
