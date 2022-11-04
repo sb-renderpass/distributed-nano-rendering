@@ -224,8 +224,53 @@ auto stream_t::recv_pkt() -> int
 	return server_id_map.at(server_ip);
 }
 
+static std::vector<uint8_t> prev_fb (frame_buffer_size,  0);
+
+auto test_calculate_motion_vector(int slice_index,  uint8_t* fb) -> int
+{
+	constexpr auto W = config::height;
+	constexpr auto H = config::width / config::num_slices;
+	const auto slice_offset = slice_buffer_size * slice_index;
+
+	auto mvec_sad = std::numeric_limits<int>::max();
+	auto mvec = 0;
+
+	constexpr auto K_W = 32;
+	constexpr auto K_H = 16;
+
+	const auto ref_i = H/2;
+	const auto ref_j = W/2;
+
+	const auto i_min = 0 + K_H/2;
+	const auto i_max = H - K_H/2;
+
+	for (auto i = i_min, j = ref_j; i < i_max; i++)
+	{
+		auto sad = 0;
+		for (auto ii = -K_H/2; ii < K_H/2; ii++)
+		{
+			for (auto jj = -K_W/2; jj < K_W/2; jj++)
+			{
+				sad += std::abs(fb[slice_offset + (ref_j + jj) + (ref_i + ii) * W] - prev_fb[slice_offset + (j + jj) + (i + ii) * W]);
+				//if (slice_index == 0) fb[slice_offset + (j + jj) + (i + ii) * W] = 0;
+				//if (slice_index == 0) fb[slice_offset + (ref_j + jj) + (ref_i + ii) * W] = 0xFF;
+			}
+		}
+		if (sad < mvec_sad)
+		{
+			mvec_sad = sad;
+			mvec = i;
+		}
+	}
+	mvec -= ref_i;
+	return mvec;
+}
+
 auto test_slice_encode(int slice_index, uint8_t* fb) -> std::vector<uint8_t>
 {
+	const auto mvec = test_calculate_motion_vector(slice_index, fb);
+	std::clog << "V " << mvec << '\n';
+
 	std::vector<uint8_t> bitstream;
 	uint8_t mem = 0;
 	auto mem_count = 0;
@@ -234,16 +279,39 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> std::vector<uint8_t>
 	constexpr auto H = config::width / config::num_slices;
 	const auto slice_offset = slice_buffer_size * slice_index;
 
-	for (auto i = 0; i < W; i++)
+	for (auto i = 0; i < H; i++)
 	{
-		for (auto j = 0; j < H; j++)
+		for (auto j = 0; j < W; j++)
 		{
-			//fb[slice_offset + i + j * W] = 0;
-			const int c = (i >  0 && j >   0) ? fb[slice_offset + (i - 1) + (j - 1) * W] : 0;
-			const int b = (i >  0 && j >  -1) ? fb[slice_offset + (i - 1) + (j + 0) * W] : 0;
-			const int d = (i >  0 && j < W-1) ? fb[slice_offset + (i - 1) + (j + 1) * W] : 0;
-			const int a = (i > -1 && j >   0) ? fb[slice_offset + (i + 0) + (j - 1) * W] : 0;
-			const int x = fb[slice_offset + i + j * W];
+			//if (slice_index == 0) fb[slice_offset + j + i * W] = 0xFF;
+
+			/*
+			// I-frame encoding
+			const int c = (j >  0 && i >   0) ? fb[slice_offset + (j - 1) + (i - 1) * W] : 0;
+			const int b = (j >  0 && i >  -1) ? fb[slice_offset + (j - 1) + (i + 0) * W] : 0;
+			const int d = (j >  0 && i < W-1) ? fb[slice_offset + (j - 1) + (i + 1) * W] : 0;
+			const int a = (j > -1 && i >   0) ? fb[slice_offset + (j + 0) + (i - 1) * W] : 0;
+			const int x = fb[slice_offset + j + i * W];
+			*/
+
+			// P-frame encoding
+			const int prev_c = (j >  0 && i+mvec >   0) ? prev_fb[slice_offset + (j - 1) + (i+mvec - 1) * W] : 0;
+			const int prev_b = (j >  0 && i+mvec >  -1) ? prev_fb[slice_offset + (j - 1) + (i+mvec + 0) * W] : 0;
+			const int prev_d = (j >  0 && i+mvec < H-1) ? prev_fb[slice_offset + (j - 1) + (i+mvec + 1) * W] : 0;
+			const int prev_a = (j > -1 && i+mvec >   0) ? prev_fb[slice_offset + (j + 0) + (i+mvec - 1) * W] : 0;
+			const int prev_x = (i+mvec > -1) ? prev_fb[slice_offset + j + (i+mvec) * W] : 0;
+
+			const int curr_c = (j >  0 && i >   0) ? fb[slice_offset + (j - 1) + (i - 1) * W] : 0;
+			const int curr_b = (j >  0 && i >  -1) ? fb[slice_offset + (j - 1) + (i + 0) * W] : 0;
+			const int curr_d = (j >  0 && i < H-1) ? fb[slice_offset + (j - 1) + (i + 1) * W] : 0;
+			const int curr_a = (j > -1 && i >   0) ? fb[slice_offset + (j + 0) + (i - 1) * W] : 0;
+			const int curr_x = fb[slice_offset + j + i * W];
+
+			const int c = curr_c - prev_c;
+			const int b = curr_b - prev_b;
+			const int d = curr_d - prev_d;
+			const int a = curr_a - prev_a;
+			const int x = curr_x - prev_x;
 
 			const auto [min_a_b, max_a_b] = std::minmax(a, b);
 			auto pred = a + b - c;
@@ -313,13 +381,15 @@ auto stream_t::recv_thread_task() -> void
 			{
 				const auto bitstream = test_slice_encode(i, (*frame_buffers)[server_id].data());
 				const auto cr = (float)bitstream.size() / slice_buffer_size;
-				std::clog << cr << ' ' << i << '\n';
+				std::clog << i << ' ' << cr << '\n';
 
 				num_total_bytes += bitstream.size();
 			}
 			const auto cr = (float)num_total_bytes / frame_buffer_size;
-			std::clog << cr << '\n';
+			std::clog << "= " << cr << '\n';
 			std::clog << "----------\n";
+
+            std::memcpy(prev_fb.data(), (*frame_buffers)[server_id].data(), frame_buffer_size);
 		}
 
 		// Early exit when all frames are received
