@@ -224,6 +224,59 @@ auto stream_t::recv_pkt() -> int
 	return server_id_map.at(server_ip);
 }
 
+struct bitstream_t
+{
+	std::vector<uint8_t> buffer {};
+	int num_bits {0};
+
+	uint8_t write_cache {0};
+	int num_write_cache_bits {0};
+
+	uint16_t read_cache {0};
+	int num_read_cache_bits {8};
+	int read_buffer_pos {0};
+
+	auto write(int bit) -> void
+	{
+		if (num_write_cache_bits == 8)
+		{
+			buffer.push_back(write_cache);
+			write_cache = 0;
+			num_write_cache_bits = 0;
+		}
+		write_cache = (write_cache << 1) | (bit & 1);
+		num_bits++;
+		num_write_cache_bits++;
+	}
+
+	auto write_flush() -> void
+	{
+		const auto num_pad_bits = 8 - num_write_cache_bits;
+		write_cache <<= num_pad_bits;
+		buffer.push_back(write_cache);
+		num_bits += num_write_cache_bits;
+		write_cache = 0;
+		num_write_cache_bits++;
+	}
+
+	auto read() -> int
+	{
+		if (num_bits == 0) throw std::runtime_error {"empty bitstream"};
+		if (num_read_cache_bits == 8)
+		{
+			read_cache = buffer[read_buffer_pos++];
+			num_read_cache_bits = 0;
+		}
+		read_cache <<= 1;
+		const auto bit = (read_cache >> 8) & 1;
+		num_bits--;
+		num_read_cache_bits++;
+		return bit;
+	}
+
+	auto size() const { return num_bits; }
+};
+
 static std::vector<uint8_t> prev_fb (frame_buffer_size,  0);
 
 auto test_calculate_motion_vector(int slice_index,  uint8_t* fb) -> int
@@ -266,18 +319,47 @@ auto test_calculate_motion_vector(int slice_index,  uint8_t* fb) -> int
 	return mvec;
 }
 
-auto test_slice_encode(int slice_index, uint8_t* fb) -> std::vector<uint8_t>
+auto get_ch(uint8_t c)
+{
+	return (c >> 3) & 0b111;
+}
+
+auto zigzag_encode(int x)
+{
+	return (x >> 31) ^ (x << 1);
+}
+
+auto fixed_prediction(int a, int b, int c) -> int
+{
+	const auto [min_a_b, max_a_b] = std::minmax(a, b);
+	auto pred = a + b - c;
+	if (c >= max_a_b) return min_a_b;
+	else if (c <= min_a_b) return max_a_b;
+	return a + b - c;
+}
+
+auto calculate_k(int a, int b, int c, int d) -> int
+{
+	const auto level = std::abs(d - b) + std::abs(b - c) + std::abs(c - a);
+	auto k = 0;
+	while ((3 << k) < level) { k++; }
+	return k;
+}
+
+auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
 {
 	const auto mvec = test_calculate_motion_vector(slice_index, fb);
 	std::clog << "V " << mvec << '\n';
 
-	std::vector<uint8_t> bitstream;
-	uint8_t mem = 0;
-	auto mem_count = 0;
+	bitstream_t bitstream;
 
 	constexpr auto W = config::height;
 	constexpr auto H = config::width / config::num_slices;
 	const auto slice_offset = slice_buffer_size * slice_index;
+
+	std::array<int, 15> resd_hist {};
+	std::fill(std::begin(resd_hist), std::end(resd_hist), 0);
+	auto est_num_huff_enc_bits = 0;
 
 	for (auto i = 0; i < H; i++)
 	{
@@ -285,16 +367,22 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> std::vector<uint8_t>
 		{
 			//if (slice_index == 0) fb[slice_offset + j + i * W] = 0xFF;
 
-			/*
 			// I-frame encoding
-			const int c = (j >  0 && i >   0) ? fb[slice_offset + (j - 1) + (i - 1) * W] : 0;
-			const int b = (j >  0 && i >  -1) ? fb[slice_offset + (j - 1) + (i + 0) * W] : 0;
-			const int d = (j >  0 && i < W-1) ? fb[slice_offset + (j - 1) + (i + 1) * W] : 0;
-			const int a = (j > -1 && i >   0) ? fb[slice_offset + (j + 0) + (i - 1) * W] : 0;
-			const int x = fb[slice_offset + j + i * W];
-			*/
+			int c = (i >  0 && j >   0) ? fb[slice_offset + (j - 1) + (i - 1) * W] : 0;
+			int b = (i >  0 && j >  -1) ? fb[slice_offset + (j + 0) + (i - 1) * W] : 0;
+			int d = (i >  0 && j < W-1) ? fb[slice_offset + (j + 1) + (i - 1) * W] : 0;
+			int a = (i > -1 && j >   0) ? fb[slice_offset + (j - 1) + (i + 0) * W] : 0;
+			int x = fb[slice_offset + j + i * W];
 
+			c = get_ch(c);
+			b = get_ch(b);
+			d = get_ch(d);
+			a = get_ch(a);
+			x = get_ch(x);
+
+			/*
 			// P-frame encoding
+			// TODO: Fix indices (i, j)
 			const int prev_c = (j >  0 && i+mvec >   0) ? prev_fb[slice_offset + (j - 1) + (i+mvec - 1) * W] : 0;
 			const int prev_b = (j >  0 && i+mvec >  -1) ? prev_fb[slice_offset + (j - 1) + (i+mvec + 0) * W] : 0;
 			const int prev_d = (j >  0 && i+mvec < H-1) ? prev_fb[slice_offset + (j - 1) + (i+mvec + 1) * W] : 0;
@@ -312,41 +400,102 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> std::vector<uint8_t>
 			const int d = curr_d - prev_d;
 			const int a = curr_a - prev_a;
 			const int x = curr_x - prev_x;
+			*/
 
-			const auto [min_a_b, max_a_b] = std::minmax(a, b);
-			auto pred = a + b - c;
-			if (c >= max_a_b) pred = min_a_b;
-			else if (c <= min_a_b) pred = max_a_b;
+			const auto pred = fixed_prediction(a, b, c);
+			const auto k = calculate_k(a, b, c, d);
 
 			const auto resd = x - pred;
 
-			const auto level = std::abs(d - b) + std::abs(b - c) + std::abs(c - a);
-			auto k = 0;
-			while ((3 << k) < level) { k++; }
+			const auto bin = zigzag_encode(resd);
+			resd_hist[bin]++;
+			est_num_huff_enc_bits += (bin + 1);
+			//if (i == 0) std::clog << bin << '\n';
 
-			const uint32_t x_ = (resd >> 30) ^ (2 * resd);
-			const auto high_bits = x_ >> k;
-			const auto tmp_bits = (uint64_t)x_ & ((1ULL << (uint64_t)k) - 1ULL);
-			uint64_t enc_value = (1ULL << high_bits) | ((tmp_bits) << k);
-			auto enc_count = high_bits + 1 + k;
+			const int v = (resd >> 30) ^ (2 * resd);
+			const auto msb_bits = v >> k;
+			const auto lsb_bits = (uint64_t)v & ((1ULL << (uint64_t)k) - 1ULL);
+			const uint64_t enc_value = (1ULL << (uint64_t)k) | lsb_bits;
+			const auto num_enc_bits = msb_bits + 1 + k;
 
-            while (enc_count > 0)
-            {
-                mem = (mem << 1) | (enc_value & 1);
-                enc_value >>= 1;
-                enc_count--;
-                mem_count++;
-                if (mem_count == 8)
-                {
-                    bitstream.push_back(mem);
-                    mem = 0;
-                    mem_count = 0;
-                }
+			/*
+			if (i==0 && j <= 96)
+			{
+				//std::clog << '(' << a << ',' << b << ',' << c << ',' << d << ") " << x << " - " << pred << '\n';
+				std::clog << "MOO: (" << i << ',' << j << ") " << k << " (" << msb_bits << ',' << lsb_bits << ") " << v << ' ' << resd << '\n';
+				//std::clog << bitstream.buffer.size() << ' ' <<  bitstream.size() << ' ' << num_enc_bits << ' ' <<  enc_value << '\n';
 			}
+			*/
+
+			for (auto i = 0; i < num_enc_bits; i++)
+			{
+				bitstream.write(enc_value >> (num_enc_bits - i - 1));
+			}
+
+			/*
+			if (i==0 && j == 82)
+			{
+				std::clog
+				  << (int)bitstream.buffer[49] << ' '
+				  << (int)bitstream.buffer[50] << ' '
+				  << (int)bitstream.buffer[51] << ' '
+				  << (int)bitstream.buffer[52] << '\n';
+			}
+			*/
 		}
 	}
 
+	//for (auto i = 0; i < resd_hist.size(); i++) std::clog << resd_hist[i] << ' '; std::clog << '\n';
+
+	const auto cr = (float)(3 * est_num_huff_enc_bits) / (slice_buffer_size * 8);
+	std::clog << slice_index << ' ' << cr << '\n';
+
 	return bitstream;
+}
+
+auto test_slice_decode(int slice_index, bitstream_t& bitstream) -> std::vector<uint8_t>
+{
+	std::vector<uint8_t> result (slice_buffer_size, 0);
+
+	constexpr auto W = config::height;
+	constexpr auto H = config::width / config::num_slices;
+	const auto slice_offset = slice_buffer_size * slice_index;
+
+	for (auto i = 0; i < H; i++)
+	{
+		for (auto j = 0; j < W; j++)
+		{
+			const int c = (i >  0 && j >   0) ? result[(j - 1) + (i - 1) * W] : 0;
+			const int b = (i >  0 && j >  -1) ? result[(j + 0) + (i - 1) * W] : 0;
+			const int d = (i >  0 && j < W-1) ? result[(j + 1) + (i - 1) * W] : 0;
+			const int a = (i > -1 && j >   0) ? result[(j - 1) + (i + 0) * W] : 0;
+
+			const auto pred = fixed_prediction(a, b, c);
+			const auto k = calculate_k(a, b, c, d);
+
+			auto msb_bits = 0;
+			while (bitstream.read() == 0)
+			{
+				msb_bits++;
+			}
+			uint64_t lsb_bits = 0;
+			for (auto ii = 0; ii < k; ii++)
+			{
+				lsb_bits = (lsb_bits << 1) | bitstream.read();
+			}
+			const uint64_t v = ((uint64_t)msb_bits << (uint64_t)k) | lsb_bits;
+			const auto resd = ((int)v >> 1) ^ (((int)v << 31) >> 31);
+
+			const auto x = pred + resd;
+			result[j + i * W] = x;
+
+			//std::clog << '(' << a << ',' << b << ',' << c << ',' << d << ") " << k << '\n';
+			//std::clog << "MOO: (" << i << ',' << j << ") " << k << " (" << msb_bits << ',' << lsb_bits << ") " << v << ' ' << resd << '\n';
+			//if (j == 96) std::exit(0);
+		}
+	}
+
+	return result;
 }
 
 auto stream_t::recv_thread_task() -> void
@@ -379,11 +528,15 @@ auto stream_t::recv_thread_task() -> void
 			auto num_total_bytes = 0;
 			for (auto i = 0; i < config::num_slices; i++)
 			{
-				const auto bitstream = test_slice_encode(i, (*frame_buffers)[server_id].data());
+				auto bitstream = test_slice_encode(i, (*frame_buffers)[server_id].data());
+				bitstream.write_flush();
 				const auto cr = (float)bitstream.size() / slice_buffer_size;
-				std::clog << i << ' ' << cr << '\n';
+				//std::clog << i << ' ' << cr << '\n';
 
 				num_total_bytes += bitstream.size();
+
+				//std::clog << "~~~\n";
+				test_slice_decode(i, bitstream);
 			}
 			const auto cr = (float)num_total_bytes / frame_buffer_size;
 			std::clog << "= " << cr << '\n';
