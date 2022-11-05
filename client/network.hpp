@@ -20,10 +20,9 @@
 #include <fmt/core.h>
 #include <fmt/color.h>
 
-#include "bitstream.hpp"
 #include "config.hpp"
-#include "codec.hpp"
 #include "types.hpp"
+#include "common/codec.hpp"
 
 constexpr auto frame_buffer_width  = config::width;
 constexpr auto frame_buffer_height = config::height;
@@ -256,20 +255,22 @@ auto stream_t::recv_thread_task() -> void
 			complete_stream_bitmask |= (1U << server_id);
 
 			// CODEC
+			constexpr auto W = config::height;
+			constexpr auto H = config::width / config::num_slices;
 			auto num_total_bytes = 0;
 			for (auto i = 0; i < config::num_slices; i++)
 			{
 				const auto slice_offset = i * slice_buffer_size;
 				auto slice_buffer = (*frame_buffers)[server_id].data() + slice_offset;
 
-				codec::encode_slice(slice_buffer, bitstream);
+				codec::encode_slice(slice_buffer, bitstream, W, H);
 				bitstream.flush();
 				const auto cr = (float)bitstream.size_bytes() / slice_buffer_size;
 				std::clog << i << ' ' << cr << '\n';
 
 				num_total_bytes += bitstream.size_bytes();
 
-				codec::decode_slice(bitstream, slice_buffer);
+				codec::decode_slice(bitstream, slice_buffer, W, H);
 
 				bitstream.clear();
 			}

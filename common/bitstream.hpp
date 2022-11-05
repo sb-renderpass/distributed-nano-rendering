@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <stdexcept>
 
 class bitstream_t
 {
@@ -50,7 +51,9 @@ public:
 
 	auto read() -> int
 	{
+#if defined(__cpp_exceptions)
 		if (num_bits == 0) throw std::runtime_error {"Empty bitstream!"};
+#endif
 		if (num_read_cache_bits == max_read_cache_bits) fetch_read_cache();
 		read_cache <<= 1;
 		const auto bit = (read_cache >> max_read_cache_bits) & 1;

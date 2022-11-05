@@ -26,10 +26,11 @@
 
 #include "raycaster.hpp"
 #include "types.hpp"
+#include "common/codec.hpp"
 
 #define PORT CONFIG_EXAMPLE_PORT
 
-static const char *TAG = "remote_render";
+static const char *TAG = "server";
 
 namespace
 {

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 
-#include "config.hpp"
 #include "bitstream.hpp"
 
 namespace codec
@@ -37,20 +36,16 @@ inline auto zigzag_decode(int x)
 	return (x >> 1) ^ -(x & 1);
 }
 
-auto fixed_prediction(int a, int b, int c) -> int
+auto predict(int a, int b, int c) -> int
 {
 	const auto [min_a_b, max_a_b] = std::minmax(a, b);
-	auto pred = a + b - c;
 	if (c >= max_a_b) return min_a_b;
 	else if (c <= min_a_b) return max_a_b;
 	return a + b - c;
 }
 
-auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream) -> void
+auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, int H) -> void
 {
-	constexpr auto W = config::height;
-	constexpr auto H = config::width / config::num_slices;
-
 	for (auto i = 0; i < H; i++)
 	{
 		for (auto j = 0; j < W; j++)
@@ -67,7 +62,7 @@ auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream) -> void
 
 			for (auto i = 0; i < 3; i++)
 			{
-				const auto pred = fixed_prediction(a_split[i], b_split[i], c_split[i]);
+				const auto pred = predict(a_split[i], b_split[i], c_split[i]);
 				const auto resd = x_split[i] - pred;
 				const auto num_enc_bits = zigzag_encode(resd) + 1;
 				bitstream.write(1, num_enc_bits);
@@ -76,11 +71,8 @@ auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream) -> void
 	}
 }
 
-auto decode_slice(bitstream_t& bitstream, uint8_t* slice_buffer) -> void
+auto decode_slice(bitstream_t& bitstream, uint8_t* slice_buffer, int W, int H) -> void
 {
-	constexpr auto W = config::height;
-	constexpr auto H = config::width / config::num_slices;
-
 	for (auto i = 0; i < H; i++)
 	{
 		for (auto j = 0; j < W; j++)
@@ -96,7 +88,7 @@ auto decode_slice(bitstream_t& bitstream, uint8_t* slice_buffer) -> void
 			std::array<uint8_t, 3> channels {};
 			for (auto i = 0; i < 3; i++)
 			{
-				const auto pred = fixed_prediction(a_split[i], b_split[i], c_split[i]);
+				const auto pred = predict(a_split[i], b_split[i], c_split[i]);
 
 				auto num_zero_bits = 0;
 				while (bitstream.read() == 0)
