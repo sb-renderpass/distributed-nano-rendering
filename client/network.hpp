@@ -327,6 +327,16 @@ auto set_ch(uint8_t c)
 	return (c & 0b111) << 3;
 }
 
+auto split_rgb233(uint8_t c) -> std::array<uint8_t, 3>
+{
+	return
+	{
+		static_cast<uint8_t>((c >> 6) & 0b011),
+		static_cast<uint8_t>((c >> 3) & 0b111),
+		static_cast<uint8_t>((c >> 0) & 0b111),
+	};
+}
+
 auto zigzag_encode(int x)
 {
 	return (x >> 31) ^ (x << 1);
@@ -346,20 +356,12 @@ auto fixed_prediction(int a, int b, int c) -> int
 	return a + b - c;
 }
 
-auto calculate_k(int a, int b, int c, int d) -> int
-{
-	const auto level = std::abs(d - b) + std::abs(b - c) + std::abs(c - a);
-	auto k = 0;
-	while ((3 << k) < level) { k++; }
-	return k;
-}
-
-auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
+auto test_slice_encode(int slice_index, uint8_t* fb) -> std::array<bitstream_t, 3>
 {
 	//const auto mvec = test_calculate_motion_vector(slice_index, fb);
 	//std::clog << "V " << mvec << '\n';
 
-	bitstream_t bitstream;
+	std::array<bitstream_t, 3> bitstreams;
 
 	constexpr auto W = config::height;
 	constexpr auto H = config::width / config::num_slices;
@@ -376,17 +378,11 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
 			//if (slice_index == 0) fb[slice_offset + j + i * W] = 0xFF;
 
 			// I-frame encoding
-			int c = (i >  0 && j >   0) ? fb[slice_offset + (j - 1) + (i - 1) * W] : 0;
-			int b = (i >  0 && j >  -1) ? fb[slice_offset + (j + 0) + (i - 1) * W] : 0;
-			int d = (i >  0 && j < W-1) ? fb[slice_offset + (j + 1) + (i - 1) * W] : 0;
-			int a = (i > -1 && j >   0) ? fb[slice_offset + (j - 1) + (i + 0) * W] : 0;
-			int x = fb[slice_offset + j + i * W];
-
-			c = get_ch(c);
-			b = get_ch(b);
-			d = get_ch(d);
-			a = get_ch(a);
-			x = get_ch(x);
+			const auto c = (i >  0 && j >   0) ? fb[slice_offset + (j - 1) + (i - 1) * W] : 0;
+			const auto b = (i >  0 && j >  -1) ? fb[slice_offset + (j + 0) + (i - 1) * W] : 0;
+			const auto d = (i >  0 && j < W-1) ? fb[slice_offset + (j + 1) + (i - 1) * W] : 0;
+			const auto a = (i > -1 && j >   0) ? fb[slice_offset + (j - 1) + (i + 0) * W] : 0;
+			const auto x = fb[slice_offset + j + i * W];
 
 			/*
 			// P-frame encoding
@@ -410,20 +406,25 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
 			const int x = curr_x - prev_x;
 			*/
 
-			const auto pred = fixed_prediction(a, b, c);
+			const auto c_split = split_rgb233(c);
+			const auto b_split = split_rgb233(b);
+			const auto d_split = split_rgb233(d);
+			const auto a_split = split_rgb233(a);
+			const auto x_split = split_rgb233(x);
 
-			const auto resd = x - pred;
-
-			constexpr auto encoded = 1;
-			const auto num_enc_bits = zigzag_encode(resd) + 1;
-			//resd_hist[bin]++;
-			//est_num_huff_enc_bits += (bin + 1);
-
-			//if (i == 0 && j <= 8) std::clog << "(" << i << ',' << j << ") " << ' ' << num_enc_bits << ' ' << resd << ' ' << x << '\n';
-
-			for (auto i = 0; i < num_enc_bits; i++)
+			for (auto i = 0; i < 3; i++)
 			{
-				bitstream.write(encoded >> (num_enc_bits - i - 1));
+				const auto pred = fixed_prediction(a_split[i], b_split[i], c_split[i]);
+				const auto resd = x_split[i] - pred;
+				const auto num_enc_bits = zigzag_encode(resd) + 1;
+
+				//if (i == 0 && j <= 8) std::clog << "(" << i << ',' << j << ") " << ' ' << num_enc_bits << ' ' << resd << ' ' << x << '\n';
+
+				for (auto k = 0; k < num_enc_bits; k++)
+				{
+					constexpr auto encoded = 1;
+					bitstreams[i].write(encoded >> (num_enc_bits - k - 1));
+				}
 			}
 		}
 	}
@@ -433,7 +434,7 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
 	//const auto cr = (float)(3 * est_num_huff_enc_bits) / (slice_buffer_size * 8);
 	//std::clog << slice_index << ' ' << cr << '\n';
 
-	return bitstream;
+	return bitstreams;
 }
 
 auto test_slice_decode(int slice_index, bitstream_t& bitstream) -> std::vector<uint8_t>
@@ -523,15 +524,15 @@ auto stream_t::recv_thread_task() -> void
 			auto num_total_bytes = 0;
 			for (auto i = 0; i < config::num_slices; i++)
 			{
-				auto bitstream = test_slice_encode(i, (*frame_buffers)[server_id].data());
-				bitstream.write_flush();
-				const auto cr = (float)bitstream.buffer.size() / slice_buffer_size;
+				auto bitstreams = test_slice_encode(i, (*frame_buffers)[server_id].data());
+				for (auto i = 0; i < 3; i++) bitstreams[i].write_flush();
+				const auto cr = (float)bitstreams[1].buffer.size() / slice_buffer_size;
 				std::clog << i << ' ' << cr << '\n';
 
-				num_total_bytes += bitstream.buffer.size();
+				num_total_bytes += bitstreams[1].buffer.size();
 
 				//std::clog << "~~~~~\n";
-				const auto decoded = test_slice_decode(i, bitstream);
+				const auto decoded = test_slice_decode(i, bitstreams[1]);
 				//test_same(i, (*frame_buffers)[server_id].data(), decoded);
 			}
 			const auto cr = (float)num_total_bytes / frame_buffer_size;
