@@ -22,6 +22,7 @@
 
 #include "bitstream.hpp"
 #include "config.hpp"
+#include "codec.hpp"
 #include "types.hpp"
 
 constexpr auto frame_buffer_width  = config::width;
@@ -94,6 +95,7 @@ public:
 private:
 	std::vector<std::vector<uint8_t>>* frame_buffers; 
 
+	bitstream_t bitstream;
 	int sock {};
 	std::vector<sockaddr_in> server_addrs;
 	sockaddr_in client_addr;
@@ -121,6 +123,8 @@ stream_t::stream_t(
 	std::vector<std::vector<uint8_t>>* frame_buffers)
 	: frame_buffers {frame_buffers}
 {
+	bitstream.reserve(slice_buffer_size);
+
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0) throw std::runtime_error {"Failed to create stream socket!"};
 
@@ -225,7 +229,8 @@ auto stream_t::recv_pkt() -> int
 	return server_id_map.at(server_ip);
 }
 
-static std::vector<uint8_t> prev_fb (frame_buffer_size,  0);
+#if 0
+static std::vector<uint8_t> prev_fb (frame_buffer_size, 0);
 
 auto test_calculate_motion_vector(int slice_index,  uint8_t* fb) -> int
 {
@@ -265,53 +270,6 @@ auto test_calculate_motion_vector(int slice_index,  uint8_t* fb) -> int
 	}
 	mvec -= ref_i;
 	return mvec;
-}
-
-auto get_ch(uint8_t c)
-{
-	return (c >> 3) & 0b111;
-}
-
-auto set_ch(uint8_t c)
-{
-	return (c & 0b111) << 3;
-}
-
-auto split_rgb233(uint8_t x) -> std::array<uint8_t, 3>
-{
-	return
-	{
-		static_cast<uint8_t>((x >> 6) & 0b011),
-		static_cast<uint8_t>((x >> 3) & 0b111),
-		static_cast<uint8_t>((x >> 0) & 0b111),
-	};
-}
-
-auto join_rgb233(const std::array<uint8_t, 3>& x) -> uint8_t
-{
-	return
-		((x[0] & 0b011) << 6) |
-		((x[1] & 0b111) << 3) |
-		((x[2] & 0b111) << 0);
-}
-
-auto zigzag_encode(int x)
-{
-	return (x >> 31) ^ (x << 1);
-}
-
-auto zigzag_decode(int x)
-{
-	return (x >> 1) ^ -(x & 1);
-}
-
-auto fixed_prediction(int a, int b, int c) -> int
-{
-	const auto [min_a_b, max_a_b] = std::minmax(a, b);
-	auto pred = a + b - c;
-	if (c >= max_a_b) return min_a_b;
-	else if (c <= min_a_b) return max_a_b;
-	return a + b - c;
 }
 
 auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
@@ -433,20 +391,18 @@ auto test_slice_decode(bitstream_t& bitstream) -> std::vector<uint8_t>
 	return result;
 }
 
-auto test_same(int slice_index, const uint8_t* fb, const std::vector<uint8_t>& decoded) -> void
+auto test_same(const uint8_t* slice_buffer, const std::vector<uint8_t>& decoded) -> void
 {
-	const auto slice_offset = slice_buffer_size * slice_index;
 	for (auto i = 0; i < slice_buffer_size; i++)
 	{
-		const auto x1 = fb[slice_offset + i];
-		const auto x2 = decoded[i];
-		if (x1 != x2)
+		if (slice_buffer[i] != decoded[i])
 		{
-			std::clog << "!!! " << i << ' ' << (int)x1 << ' ' << (int)x2 << '\n';
+			std::clog << "!!! " << i << ' ' << (int)slice_buffer[i] << ' ' << (int)decoded[i] << '\n';
 			throw;
 		}
 	}
 }
+#endif
 
 auto stream_t::recv_thread_task() -> void
 {
@@ -478,22 +434,23 @@ auto stream_t::recv_thread_task() -> void
 			auto num_total_bytes = 0;
 			for (auto i = 0; i < config::num_slices; i++)
 			{
-				auto bitstream = test_slice_encode(i, (*frame_buffers)[server_id].data());
+				const auto slice_offset = i * slice_buffer_size;
+				auto slice_buffer = (*frame_buffers)[server_id].data() + slice_offset;
+
+				codec::encode_slice(slice_buffer, bitstream);
 				bitstream.flush();
 				const auto cr = (float)bitstream.size_bytes() / slice_buffer_size;
 				std::clog << i << ' ' << cr << '\n';
 
 				num_total_bytes += bitstream.size_bytes();
 
-				//std::clog << "~~~~~\n";
-				const auto decoded = test_slice_decode(bitstream);
-				test_same(i, (*frame_buffers)[server_id].data(), decoded);
+				codec::decode_slice(bitstream, slice_buffer);
+
+				bitstream.clear();
 			}
 			const auto cr = (float)num_total_bytes / frame_buffer_size;
 			std::clog << "= " << cr << '\n';
 			std::clog << "----------\n";
-
-            std::memcpy(prev_fb.data(), (*frame_buffers)[server_id].data(), frame_buffer_size);
 		}
 
 		// Early exit when all frames are received
