@@ -373,11 +373,14 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
 
 				//if (i == 0 && j <= 8) std::clog << "(" << i << ',' << j << ") " << ' ' << num_enc_bits << ' ' << resd << ' ' << x << '\n';
 
+				bitstream.write(1, num_enc_bits);
+				/*
 				for (auto k = 0; k < num_enc_bits; k++)
 				{
 					constexpr auto encoded = 1;
 					bitstream.write(encoded >> (num_enc_bits - k - 1));
 				}
+				*/
 			}
 		}
 	}
@@ -476,11 +479,11 @@ auto stream_t::recv_thread_task() -> void
 			for (auto i = 0; i < config::num_slices; i++)
 			{
 				auto bitstream = test_slice_encode(i, (*frame_buffers)[server_id].data());
-				bitstream.write_flush();
-				const auto cr = (float)bitstream.buffer.size() / slice_buffer_size;
+				bitstream.flush();
+				const auto cr = (float)bitstream.size_bytes() / slice_buffer_size;
 				std::clog << i << ' ' << cr << '\n';
 
-				num_total_bytes += bitstream.buffer.size();
+				num_total_bytes += bitstream.size_bytes();
 
 				//std::clog << "~~~~~\n";
 				const auto decoded = test_slice_decode(bitstream);
