@@ -20,6 +20,7 @@
 #include <fmt/core.h>
 #include <fmt/color.h>
 
+#include "bitstream.hpp"
 #include "config.hpp"
 #include "types.hpp"
 
@@ -223,57 +224,6 @@ auto stream_t::recv_pkt() -> int
 
 	return server_id_map.at(server_ip);
 }
-
-struct bitstream_t
-{
-	std::vector<uint8_t> buffer {};
-	int num_bits {0};
-
-	uint8_t write_cache {0};
-	int num_write_cache_bits {0};
-
-	uint16_t read_cache {0};
-	int num_read_cache_bits {8};
-	int read_buffer_pos {0};
-
-	auto write(int bit) -> void
-	{
-		if (num_write_cache_bits == 8)
-		{
-			buffer.push_back(write_cache);
-			write_cache = 0;
-			num_write_cache_bits = 0;
-		}
-		write_cache = (write_cache << 1) | (bit & 1);
-		num_bits++;
-		num_write_cache_bits++;
-	}
-
-	auto write_flush() -> void
-	{
-		const auto num_pad_bits = 8 - num_write_cache_bits;
-		write_cache <<= num_pad_bits;
-		buffer.push_back(write_cache);
-		num_bits += num_write_cache_bits;
-		write_cache = 0;
-		num_write_cache_bits++;
-	}
-
-	auto read() -> int
-	{
-		if (num_bits == 0) throw std::runtime_error {"empty bitstream"};
-		if (num_read_cache_bits == 8)
-		{
-			read_cache = buffer[read_buffer_pos++];
-			num_read_cache_bits = 0;
-		}
-		read_cache <<= 1;
-		const auto bit = (read_cache >> 8) & 1;
-		num_bits--;
-		num_read_cache_bits++;
-		return bit;
-	}
-};
 
 static std::vector<uint8_t> prev_fb (frame_buffer_size,  0);
 
