@@ -14,6 +14,8 @@ struct bitstream_t
 	int num_read_cache_bits {8};
 	int read_buffer_pos {0};
 
+	auto reserve(int capacity) { buffer.reserve(capacity); }
+
 	auto write(int bit) -> void
 	{
 		constexpr auto max_write_cache_bits = sizeof(write_cache) * 8;

@@ -320,6 +320,7 @@ auto test_slice_encode(int slice_index, uint8_t* fb) -> bitstream_t
 	//std::clog << "V " << mvec << '\n';
 
 	bitstream_t bitstream;
+	bitstream.reserve(slice_buffer_size);
 
 	constexpr auto W = config::height;
 	constexpr auto H = config::width / config::num_slices;
