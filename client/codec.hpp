@@ -113,4 +113,46 @@ auto decode_slice(bitstream_t& bitstream, uint8_t* slice_buffer) -> void
 	}
 }
 
+#if 0
+auto test_calculate_motion_vector(int slice_index,  uint8_t* fb) -> int
+{
+	constexpr auto W = config::height;
+	constexpr auto H = config::width / config::num_slices;
+	const auto slice_offset = slice_buffer_size * slice_index;
+
+	auto mvec_sad = std::numeric_limits<int>::max();
+	auto mvec = 0;
+
+	constexpr auto K_W = 32;
+	constexpr auto K_H = 16;
+
+	const auto ref_i = H/2;
+	const auto ref_j = W/2;
+
+	const auto i_min = 0 + K_H/2;
+	const auto i_max = H - K_H/2;
+
+	for (auto i = i_min, j = ref_j; i < i_max; i++)
+	{
+		auto sad = 0;
+		for (auto ii = -K_H/2; ii < K_H/2; ii++)
+		{
+			for (auto jj = -K_W/2; jj < K_W/2; jj++)
+			{
+				sad += std::abs(fb[slice_offset + (ref_j + jj) + (ref_i + ii) * W] - prev_fb[slice_offset + (j + jj) + (i + ii) * W]);
+				//if (slice_index == 0) fb[slice_offset + (j + jj) + (i + ii) * W] = 0;
+				//if (slice_index == 0) fb[slice_offset + (ref_j + jj) + (ref_i + ii) * W] = 0xFF;
+			}
+		}
+		if (sad < mvec_sad)
+		{
+			mvec_sad = sad;
+			mvec = i;
+		}
+	}
+	mvec -= ref_i;
+	return mvec;
+}
+#endif
+
 } // namespace codec
