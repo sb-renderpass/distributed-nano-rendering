@@ -255,6 +255,7 @@ auto stream_t::recv_thread_task() -> void
 			complete_stream_bitmask |= (1U << server_id);
 
 			// CODEC
+			/*
 			constexpr auto W = config::height;
 			constexpr auto H = config::width / config::num_slices;
 			auto num_total_bytes = 0;
@@ -277,6 +278,7 @@ auto stream_t::recv_thread_task() -> void
 			const auto cr = (float)num_total_bytes / frame_buffer_size;
 			std::clog << "= " << cr << '\n';
 			std::clog << "----------\n";
+			*/
 		}
 
 		// Early exit when all frames are received

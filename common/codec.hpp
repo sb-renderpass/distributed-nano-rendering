@@ -8,7 +8,10 @@
 namespace codec
 {
 
-inline auto split_rgb233(uint8_t x) -> std::array<uint8_t, 3>
+using pixel_t = std::array<uint8_t, 3>;
+
+__attribute__((always_inline))
+inline auto split_rgb233(uint8_t x) -> pixel_t
 {
 	return
 	{
@@ -18,7 +21,8 @@ inline auto split_rgb233(uint8_t x) -> std::array<uint8_t, 3>
 	};
 }
 
-inline auto join_rgb233(const std::array<uint8_t, 3>& x) -> uint8_t
+__attribute__((always_inline))
+inline auto join_rgb233(const pixel_t& x) -> uint8_t
 {
 	return
 		((x[0] & 0b011) << 6) |
@@ -26,17 +30,20 @@ inline auto join_rgb233(const std::array<uint8_t, 3>& x) -> uint8_t
 		((x[2] & 0b111) << 0);
 }
 
+__attribute__((always_inline))
 inline auto zigzag_encode(int x)
 {
 	return (x >> 31) ^ (x << 1);
 }
 
+__attribute__((always_inline))
 inline auto zigzag_decode(int x)
 {
 	return (x >> 1) ^ -(x & 1);
 }
 
-auto predict(int a, int b, int c) -> int
+__attribute__((always_inline))
+inline auto predict(int a, int b, int c) -> int
 {
 	const auto [min_a_b, max_a_b] = std::minmax(a, b);
 	if (c >= max_a_b) return min_a_b;
@@ -44,6 +51,13 @@ auto predict(int a, int b, int c) -> int
 	return a + b - c;
 }
 
+__attribute__((always_inline))
+inline auto encode(uint8_t r, uint8_t g, uint8_t b, uint8_t x) -> int
+{
+	return zigzag_encode(x - predict(r, g, b)) + 1;
+}
+
+#if 0
 auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, int H) -> void
 {
 	for (auto i = 0; i < H; i++)
@@ -68,6 +82,42 @@ auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, in
 				bitstream.write(1, num_enc_bits);
 			}
 		}
+	}
+}
+#endif
+
+auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, int H) -> void
+{
+	auto b_split = pixel_t {0, 0, 0};
+	for (auto i = 0; i < H; i++)
+	{
+		auto a_split = pixel_t {0, 0, 0};
+		auto c_split = pixel_t {0, 0, 0};
+
+		for (auto j = 0; j < W; j++)
+		{
+			const auto x_split = split_rgb233(slice_buffer[j + i * W]);
+
+			auto num_enc_bits = 0;
+			auto symbol = 0U;
+			for (auto i = 0; i < 3; i++)
+			{
+				//const auto pred = predict(a_split[i], b_split[i], c_split[i]);
+				//const auto resd = x_split[i] - pred;
+				//const auto num_enc_bits = zigzag_encode(resd) + 1;
+				//bitstream.write(1, num_enc_bits);
+				//const auto num_sym_bits = zigzag_encode(resd) + 1;
+				const auto num_sym_bits = encode(a_split[i], b_split[i], c_split[i], x_split[i]);
+				symbol = (symbol << num_sym_bits) | 1;
+				num_enc_bits += num_sym_bits;
+			}
+			bitstream.write(symbol, num_enc_bits);
+
+			c_split = b_split;
+			a_split = x_split;
+			b_split = (i > 0 && j < W-1) ? split_rgb233(slice_buffer[(j + 1) + (i - 1) * W]) : pixel_t {0, 0, 0};
+		}
+		b_split = split_rgb233(slice_buffer[i * W]);
 	}
 }
 

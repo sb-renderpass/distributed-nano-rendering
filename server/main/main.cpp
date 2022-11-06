@@ -61,6 +61,9 @@ pipeline_stats_t pipeline_stats;
 
 //light_t light {22.0F, 11.5F, -1.0F, 0.0F};
 
+uint8_t bitstream_buffer[slice_buffer_size];
+bitstream_t bitstream {bitstream_buffer, slice_buffer_size};
+
 auto render_task(void* params) -> void
 {
     constexpr auto slice_width = frame_buffer_width / num_slices;
@@ -74,6 +77,14 @@ auto render_task(void* params) -> void
             const auto slice_index = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             render_elapsed -= esp_timer_get_time();
             render_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
+
+            // CODEC
+			constexpr auto W = frame_buffer_height;
+			constexpr auto H = frame_buffer_width / num_slices;
+			codec::encode_slice(slice[slice_index].buffer, bitstream, W, 4);
+			bitstream.flush();
+			bitstream.clear();
+
             render_elapsed += esp_timer_get_time();
             if (slice_id == 0) xTaskNotifyGive(network_task_handle);
         }
