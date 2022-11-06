@@ -109,7 +109,7 @@ inline auto bitstream_write(int value, int count, bs_t& bs) -> void
 	bs.nbits = new_nbits & (8 - 1);
 }
 
-auto IRAM_ATTR render_slice(
+auto render_slice(
     const render_command_t& cmd,
     int slice_start,
     int slice_stop,
@@ -117,6 +117,7 @@ auto IRAM_ATTR render_slice(
 {
     texture_cache_t<texture_height> tex_cache;
 
+	auto est_enc_bytes = 0;
 	bs_t bs {frame.buffer};
 
     const auto x_scale = cmd.tile.x_scale / frame.width;
@@ -202,9 +203,8 @@ auto IRAM_ATTR render_slice(
 		const auto tex_v_step = static_cast<float>(texture_height) / row_id_height;
 		auto tex_v = (row_id_start - (frame.height - row_id_height) / 2) * tex_v_step;
 
-		auto r0 = 0;
-		auto g0 = 0;
-		auto b0 = 0;
+		auto run_color = 0;
+		auto run_len = -1;
 
         for (auto j = 0; j < frame.height; j++)
 		{
@@ -234,30 +234,32 @@ auto IRAM_ATTR render_slice(
 			}
 
 			// CODEC
-			const auto r1 = (color >> 6) & 2;
-			const auto g1 = (color >> 3) & 3;
-			const auto b1 = (color >> 0) & 3;
-
-			const auto r = r1 - r0;
-			const auto count = ((r >> 31) ^ (r << 1)) + 1;
-			constexpr auto value = 1;
+			if (run_len == 0)
 			{
-				const uint16_t tmp = value << (8 - bs.nbits);
-				bs.cache |= (tmp >> 8);
-				const auto new_nbits = bs.nbits + count;
-				if (new_nbits >= 8) *bs.head++ = bs.cache;
-				bs.cache = tmp;
-				bs.nbits = new_nbits & (8 - 1);
+				run_color = color;
+				run_len = 1;
+			}
+			else if (color == run_color)
+			{
+				run_len++;
+			}
+			else
+			{
+				// TODO: Store run_color, run_len
+				//bitstream_write(run_color, 8, bs);
+				//bitstream_write(run_len,   8, bs);
+				est_enc_bytes += 2;
+				run_len = 1;
+				run_color = color;
 			}
 
-			r0 = r1;
-			g0 = g1;
-			b0 = b1;
-
-			//frame.buffer[j + i * frame.height] = bitstream[j + i * frame.height];
-
+			frame.buffer[j + i * frame.height] = color;
 		} //for(j)
+		// TODO: Store run_color, run_len
 	} // for(i)
+
+	//const auto sz = 320/2 * 240/4;
+	//ESP_LOGI("server", ">>> %d %d %f", est_enc_bytes, sz, (float)est_enc_bytes/(float)sz);
 }
 
 #if 0
