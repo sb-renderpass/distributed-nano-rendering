@@ -163,6 +163,52 @@ auto render_slice(
             }
         }
 
+		const auto perp_wall_dist = std::max(front_side ? (side_dist_y - delta_dist_y) : (side_dist_x - delta_dist_x), 0.1F);
+		const auto row_id_height = static_cast<int>(frame.height / perp_wall_dist);
+		const auto row_id_start = std::max((frame.height - row_id_height) / 2, 0);
+		const auto row_id_stop  = std::min((frame.height + row_id_height) / 2, frame.height);
+
+		auto tex_u = front_side ?
+			cmd.pose.pos_x + perp_wall_dist * ray_dir_x :
+			cmd.pose.pos_y + perp_wall_dist * ray_dir_y;
+		tex_u -= int(tex_u);
+
+		auto tex_x = int(tex_u * texture_width);
+		if ((!front_side && ray_dir_x > 0) && (front_side && ray_dir_y < 0)) tex_x = texture_width - 1 - tex_x;
+
+		const auto tex_id = hit - 1;
+		tex_cache.update(tex_id, tex_x);
+
+		const auto tex_v_step = static_cast<float>(texture_height) / row_id_height;
+		auto tex_v = (row_id_start - (frame.height - row_id_height) / 2) * tex_v_step;
+
+        for (auto j = 0; j < frame.height; j++)
+		{
+			if (j < row_id_start)
+			{
+                constexpr auto sky_color_rgb233 = 0b00010011;
+				frame.buffer[j + i * frame.height] = sky_color_rgb233;
+			}
+			else if (j > row_id_stop)
+			{
+                constexpr auto gnd_color_rgb233 = 0b00010000;
+				frame.buffer[j + i * frame.height] = gnd_color_rgb233;
+			}
+			else
+			{
+				//frame.buffer[j + i * frame.height] = 0xFF;
+
+                const auto tex_y = static_cast<int>(tex_v) & (texture_height - 1);
+                tex_v += tex_v_step;
+
+                const auto wall_color = tex_cache.data[tex_y];
+                frame.buffer[j + i * frame.height] = wall_color;
+			}
+		} //for(j)
+	} // for(i)
+}
+
+#if 0
         if (hit > 0)
         {
             const auto perp_wall_dist = std::max(front_side ? (side_dist_y - delta_dist_y) : (side_dist_x - delta_dist_x), 0.1F);
@@ -241,7 +287,6 @@ auto render_slice(
         */
     } // main loop
 
-#if 0
     const auto sprite_x = light.pos_x - cmd.pose.pos_x;
     const auto sprite_y = light.pos_y - cmd.pose.pos_y;
 
@@ -275,6 +320,6 @@ auto render_slice(
             }
         }
     }
-#endif
 }
+#endif
 

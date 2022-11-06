@@ -78,12 +78,14 @@ auto render_task(void* params) -> void
             render_elapsed -= esp_timer_get_time();
             render_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
 
+			/*
             // CODEC
 			constexpr auto W = frame_buffer_height;
 			constexpr auto H = frame_buffer_width / num_slices;
 			codec::encode_slice(slice[slice_index].buffer, bitstream, W, 4);
 			bitstream.flush();
 			bitstream.clear();
+			*/
 
             render_elapsed += esp_timer_get_time();
             if (slice_id == 0) xTaskNotifyGive(network_task_handle);
@@ -203,6 +205,15 @@ auto network_task(void* params) -> void
                     if (slice_id < num_slices - 1) xTaskNotify(render_task_handle, !slice_index, eSetValueWithOverwrite);
 
                     network_elapsed -= esp_timer_get_time();
+
+					/*
+					// CODEC
+					constexpr auto W = frame_buffer_height;
+					constexpr auto H = frame_buffer_width / num_slices;
+					codec::encode_slice(slice[slice_index].buffer, bitstream, W, H);
+					bitstream.flush();
+					bitstream.clear();
+					*/
 
                     for (auto i = 0; i < num_pkts_per_slice; i++)
                     {
