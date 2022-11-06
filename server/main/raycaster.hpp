@@ -91,13 +91,33 @@ auto init_renderer(int frame_buffer_width, int frame_buffer_height) -> void
     }
 }
 
-auto render_slice(
+struct bs_t
+{
+	uint8_t* head  {nullptr};
+	uint8_t  cache {0};
+	uint8_t  nbits {0};
+};
+
+__attribute__((always_inline))
+inline auto bitstream_write(int value, int count, bs_t& bs) -> void
+{
+	const uint16_t tmp = value << (8 - bs.nbits);
+	bs.cache |= (tmp >> 8);
+	const auto new_nbits = bs.nbits + count;
+	if (new_nbits >= 8) *bs.head++ = bs.cache;
+	bs.cache = tmp;
+	bs.nbits = new_nbits & (8 - 1);
+}
+
+auto IRAM_ATTR render_slice(
     const render_command_t& cmd,
     int slice_start,
     int slice_stop,
     frame_t& frame) -> void
 {
     texture_cache_t<texture_height> tex_cache;
+
+	bs_t bs {frame.buffer};
 
     const auto x_scale = cmd.tile.x_scale / frame.width;
     for (auto x = slice_start, i = 0; x < slice_stop; x++, i++)
@@ -182,17 +202,24 @@ auto render_slice(
 		const auto tex_v_step = static_cast<float>(texture_height) / row_id_height;
 		auto tex_v = (row_id_start - (frame.height - row_id_height) / 2) * tex_v_step;
 
+		auto r0 = 0;
+		auto g0 = 0;
+		auto b0 = 0;
+
         for (auto j = 0; j < frame.height; j++)
 		{
+			auto color = 0;
 			if (j < row_id_start)
 			{
                 constexpr auto sky_color_rgb233 = 0b00010011;
-				frame.buffer[j + i * frame.height] = sky_color_rgb233;
+				//frame.buffer[j + i * frame.height] = sky_color_rgb233;
+				color = sky_color_rgb233;
 			}
 			else if (j > row_id_stop)
 			{
                 constexpr auto gnd_color_rgb233 = 0b00010000;
-				frame.buffer[j + i * frame.height] = gnd_color_rgb233;
+				//frame.buffer[j + i * frame.height] = gnd_color_rgb233;
+				color = gnd_color_rgb233;
 			}
 			else
 			{
@@ -202,8 +229,33 @@ auto render_slice(
                 tex_v += tex_v_step;
 
                 const auto wall_color = tex_cache.data[tex_y];
-                frame.buffer[j + i * frame.height] = wall_color;
+                //frame.buffer[j + i * frame.height] = wall_color;
+				color = wall_color;
 			}
+
+			// CODEC
+			const auto r1 = (color >> 6) & 2;
+			const auto g1 = (color >> 3) & 3;
+			const auto b1 = (color >> 0) & 3;
+
+			const auto r = r1 - r0;
+			const auto count = ((r >> 31) ^ (r << 1)) + 1;
+			constexpr auto value = 1;
+			{
+				const uint16_t tmp = value << (8 - bs.nbits);
+				bs.cache |= (tmp >> 8);
+				const auto new_nbits = bs.nbits + count;
+				if (new_nbits >= 8) *bs.head++ = bs.cache;
+				bs.cache = tmp;
+				bs.nbits = new_nbits & (8 - 1);
+			}
+
+			r0 = r1;
+			g0 = g1;
+			b0 = b1;
+
+			//frame.buffer[j + i * frame.height] = bitstream[j + i * frame.height];
+
 		} //for(j)
 	} // for(i)
 }
