@@ -246,8 +246,8 @@ auto render_slice(
 			else
 			{
 				// TODO: Store run_color, run_len
-				//bitstream_write(run_color, 8, bs);
-				//bitstream_write(run_len,   8, bs);
+				bitstream_write(run_color, 8, bs);
+				bitstream_write(run_len,   8, bs);
 				est_enc_bytes += 2;
 				run_len = 1;
 				run_color = color;

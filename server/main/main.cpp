@@ -61,8 +61,8 @@ pipeline_stats_t pipeline_stats;
 
 //light_t light {22.0F, 11.5F, -1.0F, 0.0F};
 
-uint8_t bitstream_buffer[slice_buffer_size];
-bitstream_t bitstream {bitstream_buffer, slice_buffer_size};
+//static uint8_t DRAM_ATTR enc_buffer[slice_buffer_size];
+//bitstream_t bitstream {bitstream_buffer, slice_buffer_size};
 
 auto render_task(void* params) -> void
 {
@@ -82,9 +82,7 @@ auto render_task(void* params) -> void
             // CODEC
 			constexpr auto W = frame_buffer_height;
 			constexpr auto H = frame_buffer_width / num_slices;
-			codec::encode_slice(slice[slice_index].buffer, bitstream, W, 4);
-			bitstream.flush();
-			bitstream.clear();
+			const volatile auto n = codec::encode_slice(slice[slice_index].buffer, enc_buffer, W, H);
 			*/
 
             render_elapsed += esp_timer_get_time();

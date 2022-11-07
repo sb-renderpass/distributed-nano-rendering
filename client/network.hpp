@@ -94,7 +94,6 @@ public:
 private:
 	std::vector<std::vector<uint8_t>>* frame_buffers; 
 
-	bitstream_t bitstream;
 	int sock {};
 	std::vector<sockaddr_in> server_addrs;
 	sockaddr_in client_addr;
@@ -122,8 +121,6 @@ stream_t::stream_t(
 	std::vector<std::vector<uint8_t>>* frame_buffers)
 	: frame_buffers {frame_buffers}
 {
-	bitstream.reserve(slice_buffer_size);
-
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0) throw std::runtime_error {"Failed to create stream socket!"};
 
@@ -230,6 +227,8 @@ auto stream_t::recv_pkt() -> int
 
 auto stream_t::recv_thread_task() -> void
 {
+	//uint8_t enc_buffer[slice_buffer_size];
+
 	// TODO: Handle graceful exit
 	for (;;)
 	{
@@ -264,16 +263,13 @@ auto stream_t::recv_thread_task() -> void
 				const auto slice_offset = i * slice_buffer_size;
 				auto slice_buffer = (*frame_buffers)[server_id].data() + slice_offset;
 
-				codec::encode_slice(slice_buffer, bitstream, W, H);
-				bitstream.flush();
-				const auto cr = (float)bitstream.size_bytes() / slice_buffer_size;
+				const auto num_enc_bytes = codec::encode_slice(slice_buffer, enc_buffer, W, H);
+				const auto cr = (float)num_enc_bytes / slice_buffer_size;
 				std::clog << i << ' ' << cr << '\n';
 
-				num_total_bytes += bitstream.size_bytes();
+				codec::decode_slice(enc_buffer, num_enc_bytes, slice_buffer);
 
-				codec::decode_slice(bitstream, slice_buffer, W, H);
-
-				bitstream.clear();
+				num_total_bytes += num_enc_bytes;
 			}
 			const auto cr = (float)num_total_bytes / frame_buffer_size;
 			std::clog << "= " << cr << '\n';

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <iostream>
 #include <array>
 
 #include "bitstream.hpp"
@@ -57,6 +58,56 @@ inline auto encode(uint8_t r, uint8_t g, uint8_t b, uint8_t x) -> int
 	return zigzag_encode(x - predict(r, g, b)) + 1;
 }
 
+auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H) -> int
+{
+	auto src_ptr = slice_buffer;
+	auto dst_ptr = enc_buffer;
+	for (auto i = 0; i < H; i++)
+	{
+		auto run_val = 0;
+		auto run_len = 0;
+		for (auto j = 0; j < W; j++)
+		{
+			const auto value = *src_ptr++;
+			if (run_len == 0)
+			{
+				run_val = value;
+				run_len = 1;
+			}
+			else if (value == run_val)
+			{
+				run_len++;
+			}
+			else
+			{
+				*dst_ptr++ = run_val;
+				*dst_ptr++ = run_len;
+				run_val = value;
+				run_len = 1;
+			}
+		}
+		*dst_ptr++ = run_val;
+		*dst_ptr++ = run_len;
+	}
+	return dst_ptr - enc_buffer;
+}
+
+auto decode_slice(const uint8_t* enc_buffer, int num_enc_bytes, uint8_t* slice_buffer) -> void
+{
+	auto src_ptr = enc_buffer;
+	auto dst_ptr = slice_buffer;
+	const auto num_enc_symbols = num_enc_bytes / 2;
+	for (auto i = 0; i < num_enc_symbols; i++)
+	{
+		const auto run_val = *src_ptr++;
+		const auto run_len = *src_ptr++;
+		for (auto j = 0; j < run_len; j++)
+		{
+			*dst_ptr++ = run_val;
+		}
+	}
+}
+
 #if 0
 auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, int H) -> void
 {
@@ -86,6 +137,7 @@ auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, in
 }
 #endif
 
+#if 0
 auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, int H) -> void
 {
 	auto b_split = pixel_t {0, 0, 0};
@@ -120,7 +172,9 @@ auto encode_slice(const uint8_t* slice_buffer, bitstream_t& bitstream, int W, in
 		b_split = split_rgb233(slice_buffer[i * W]);
 	}
 }
+#endif
 
+#if 0
 auto decode_slice(bitstream_t& bitstream, uint8_t* slice_buffer, int W, int H) -> void
 {
 	for (auto i = 0; i < H; i++)
@@ -154,6 +208,7 @@ auto decode_slice(bitstream_t& bitstream, uint8_t* slice_buffer, int W, int H) -
 		}
 	}
 }
+#endif
 
 #if 0
 auto test_calculate_motion_vector(int slice_index,  uint8_t* fb) -> int
