@@ -44,24 +44,22 @@ constexpr auto slice_buffer_size   = frame_buffer_size / num_slices;
 
 } // anonymous namespace
 
-TaskHandle_t render_task_handle  {nullptr};
-TaskHandle_t network_task_handle {nullptr};
+TaskHandle_t render_task_handle {nullptr};
+TaskHandle_t stream_task_handle {nullptr};
 
 render_command_t cmd;
 
+// Double-buffered slice for simultaneous render and stream
 encoded_slice_t slice[2];
 
 struct pipeline_stats_t
 {
-    uint32_t render_elapsed  {0};
-    uint32_t network_elapsed {0};
+    uint32_t render_elapsed {0};
+    uint32_t stream_elapsed {0};
 };
 pipeline_stats_t pipeline_stats;
 
 //light_t light {22.0F, 11.5F, -1.0F, 0.0F};
-
-//static uint8_t DRAM_ATTR enc_buffer[slice_buffer_size];
-//bitstream_t bitstream {bitstream_buffer, slice_buffer_size};
 
 auto render_task(void* params) -> void
 {
@@ -69,17 +67,24 @@ auto render_task(void* params) -> void
 
     for (;;)
     {
+		// Wait for network thread to start a new frame
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        auto index = 0U;
         auto render_elapsed = 0U;
 
         for (auto slice_id = 0; slice_id < num_slices; slice_id++)
         {
-            const auto slice_index = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
             render_elapsed -= esp_timer_get_time();
-            render_encode_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
+            render_encode_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[index]);
             render_elapsed += esp_timer_get_time();
 
-            if (slice_id == 0) xTaskNotifyGive(network_task_handle);
+			// FIXME: Hack to ensure render thread is always slower than network thread
+			vTaskDelay(pdMS_TO_TICKS(2));
+
+			// Notify network thread to stream rendered slice and swap slice buffers
+			xTaskNotify(stream_task_handle, index, eSetValueWithOverwrite);
+			index = !index;
         }
 
         pipeline_stats.render_elapsed = render_elapsed;
@@ -112,7 +117,7 @@ inline auto write_slice_info(uint8_t num_pkts_in_slice, uint8_t* buffer) -> uint
 	return buffer;
 }
 
-auto network_task(void* params) -> void
+auto stream_task(void* params) -> void
 {
     int addr_family = (int)params;
     int ip_protocol = 0;
@@ -193,20 +198,19 @@ auto network_task(void* params) -> void
 
             if (recv_nbytes == sizeof(cmd))
             {
-                auto slice_index = 0U;
-                xTaskNotify(render_task_handle, slice_index, eSetValueWithOverwrite);
-				ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+				// Notify render thread to start a new frame when a new pose is received
+				xTaskNotifyGive(render_task_handle);
 
-                auto network_elapsed = 0U;
+                auto stream_elapsed = 0U;
 
                 for (auto slice_id = 0; slice_id < num_slices; slice_id++)
                 {
-                    if (slice_id < num_slices - 1) xTaskNotify(render_task_handle, !slice_index, eSetValueWithOverwrite);
+					// Wait for render thread to signal that the rendered slice is ready for streaming
+					const auto index = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-					auto last_wake_time = xTaskGetTickCount();
-                    network_elapsed -= esp_timer_get_time();
+                    stream_elapsed -= esp_timer_get_time();
 
-					const auto encoded_slice_size = slice[slice_index].size;
+					const auto encoded_slice_size = slice[index].size;
 					const auto num_pkts_in_slice = static_cast<int>(std::ceil(static_cast<float>(encoded_slice_size) / pkt_buffer_size));
 					const auto pkt_payload_size   = pkt_buffer_size - sizeof(pkt_info_t);
 
@@ -217,7 +221,7 @@ auto network_task(void* params) -> void
                         const auto is_frame_end = slice_id == num_slices - 1;
                         const auto is_slice_end = pkt_id == num_pkts_in_slice - 1;
                         ptr = write_pkt_info(is_frame_end, is_slice_end, slice_id, pkt_id, ptr);
-						ptr = write_pkt_payload(slice[slice_index].buffer + pkt_id * pkt_payload_size, pkt_payload_size, ptr);
+						ptr = write_pkt_payload(slice[index].buffer + pkt_id * pkt_payload_size, pkt_payload_size, ptr);
 
                         if (is_slice_end)
 						{
@@ -243,16 +247,10 @@ auto network_task(void* params) -> void
 							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
                     } // for(pkt_id)
 
-                    // HACK: Delay network thread to always be slower than render
-                    //vTaskDelay(pdMS_TO_TICKS(2));
-                    vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(3));
-
-                    slice_index = !slice_index; // Swap slice buffers for render and stream threads
-
-                    network_elapsed += esp_timer_get_time();
+                    stream_elapsed += esp_timer_get_time();
                 } // for(slice_id)
 
-                pipeline_stats.network_elapsed = network_elapsed;
+                pipeline_stats.stream_elapsed = stream_elapsed;
             }
             else
             {
@@ -301,7 +299,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(render_task, "render_task", 4096, nullptr, 5, &render_task_handle, 1);
 
 #ifdef CONFIG_EXAMPLE_IPV4
-    xTaskCreatePinnedToCore(network_task, "network_task", 4096, reinterpret_cast<void*>(AF_INET), 5, &network_task_handle, 0);
+    xTaskCreatePinnedToCore(stream_task, "stream_task", 4096, reinterpret_cast<void*>(AF_INET), 5, &stream_task_handle, 0);
 #endif
 #ifdef CONFIG_EXAMPLE_IPV6
     xTaskCreate(network_task, "network_task", 4096, reinterpret_cast<void*>(AF_INET6), 5, nullptr);
