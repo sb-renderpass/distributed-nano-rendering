@@ -34,9 +34,9 @@ static const char *TAG = "server";
 namespace
 {
 
-constexpr auto frame_buffer_width  = 320 / 2;
+constexpr auto frame_buffer_width  = 320;
 constexpr auto frame_buffer_height = 240;
-constexpr auto pkt_buffer_size     = 1400;
+constexpr auto pkt_buffer_size     = 1440;
 constexpr auto num_slices          = 4;
 
 constexpr auto frame_buffer_size   = frame_buffer_width * frame_buffer_height;
