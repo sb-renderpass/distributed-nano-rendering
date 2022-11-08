@@ -9,6 +9,8 @@
 namespace codec
 {
 
+constexpr auto stream_end_symbol = 0xFF;
+
 using pixel_t = std::array<uint8_t, 3>;
 
 __attribute__((always_inline))
@@ -60,7 +62,6 @@ inline auto encode(uint8_t r, uint8_t g, uint8_t b, uint8_t x) -> int
 
 auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H) -> int
 {
-	auto src_ptr = slice_buffer;
 	auto dst_ptr = enc_buffer;
 	for (auto i = 0; i < H; i++)
 	{
@@ -68,7 +69,7 @@ auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H
 		auto run_len = 0;
 		for (auto j = 0; j < W; j++)
 		{
-			const auto value = *src_ptr++;
+			const auto value = *slice_buffer++;
 			if (run_len == 0)
 			{
 				run_val = value;
@@ -86,22 +87,25 @@ auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H
 				run_len = 1;
 			}
 		}
+		// Add last run
 		*dst_ptr++ = run_val;
 		*dst_ptr++ = run_len;
 	}
+	// Terminate stream with special symbol
+	*dst_ptr++ = stream_end_symbol;
+	*dst_ptr++ = stream_end_symbol;
 	return dst_ptr - enc_buffer;
 }
 
 auto decode_slice(const uint8_t* enc_buffer, uint8_t* slice_buffer) -> int
 {
 	auto src_ptr = enc_buffer;
-	auto dst_ptr = slice_buffer;
 	for (;;)
 	{
 		const auto run_val = *src_ptr++;
 		const auto run_len = *src_ptr++;
-		if (run_val == 0xFF && run_len == 0xFF) break;
-		for (auto j = 0; j < run_len; j++) *dst_ptr++ = run_val;
+		if (run_val == stream_end_symbol && run_len == stream_end_symbol) break;
+		for (auto i = 0; i < run_len; i++) *slice_buffer++ = run_val;
 	}
 	return src_ptr - enc_buffer;
 }

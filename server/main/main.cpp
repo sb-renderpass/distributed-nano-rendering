@@ -26,7 +26,6 @@
 
 #include "raycaster.hpp"
 #include "types.hpp"
-#include "common/codec.hpp"
 
 #define PORT CONFIG_EXAMPLE_PORT
 
@@ -78,14 +77,6 @@ auto render_task(void* params) -> void
 
             render_elapsed -= esp_timer_get_time();
             render_encode_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
-
-			/*
-            // CODEC
-			constexpr auto W = frame_buffer_height;
-			constexpr auto H = frame_buffer_width / num_slices;
-			const volatile auto n = codec::encode_slice(slice[slice_index].buffer, enc_buffer, W, H);
-			*/
-
             render_elapsed += esp_timer_get_time();
 
             if (slice_id == 0) xTaskNotifyGive(network_task_handle);

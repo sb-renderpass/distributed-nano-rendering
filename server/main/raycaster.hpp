@@ -2,8 +2,9 @@
 
 #include <cmath>
 
-#include "textures/textures.hpp"
 #include "types.hpp"
+#include "common/codec.hpp"
+#include "textures/textures.hpp"
 
 template <int size_ = 64, int stride_ = size_>
 struct texture_cache_t
@@ -254,9 +255,9 @@ auto render_encode_slice(
 		*dst_ptr++ = run_len;
 	} // for(i)
 
-	// Terminate encoded stream
-	*dst_ptr++ = 0xFF;
-	*dst_ptr++ = 0xFF;
+	// Terminate stream with special symbol
+	*dst_ptr++ = codec::stream_end_symbol;
+	*dst_ptr++ = codec::stream_end_symbol;
 
 	frame.size = dst_ptr - frame.buffer;
 }
