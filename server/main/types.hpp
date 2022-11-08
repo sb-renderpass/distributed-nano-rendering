@@ -26,6 +26,20 @@ struct render_command_t
     tile_t tile;
 };
 
+struct pkt_info_t
+{
+	uint8_t frame_end : 1 {0};
+	uint8_t slice_end : 1 {0};
+	uint8_t reserved  : 2 {0};
+	uint8_t slice_id  : 4 {0}; // max 16 slices per frame
+	uint8_t pkt_id        {0}; // max 256 packets per slice
+};
+
+struct slice_info_t
+{
+	uint8_t num_pkts {0};
+};
+
 struct pkt_header_t
 {
 	uint16_t frame_num    {0};
@@ -34,10 +48,10 @@ struct pkt_header_t
 	uint32_t offset  : 24 {0};
 };
 
-struct frame_t
+struct encoded_slice_t
 {
     int width  {0};
     int height {0};
+    int size   {0};
     uint8_t* buffer {nullptr};
 };
-

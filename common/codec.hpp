@@ -92,20 +92,18 @@ auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H
 	return dst_ptr - enc_buffer;
 }
 
-auto decode_slice(const uint8_t* enc_buffer, int num_enc_bytes, uint8_t* slice_buffer) -> void
+auto decode_slice(const uint8_t* enc_buffer, uint8_t* slice_buffer) -> int
 {
 	auto src_ptr = enc_buffer;
 	auto dst_ptr = slice_buffer;
-	const auto num_enc_symbols = num_enc_bytes / 2;
-	for (auto i = 0; i < num_enc_symbols; i++)
+	for (;;)
 	{
 		const auto run_val = *src_ptr++;
 		const auto run_len = *src_ptr++;
-		for (auto j = 0; j < run_len; j++)
-		{
-			*dst_ptr++ = run_val;
-		}
+		if (run_val == 0xFF && run_len == 0xFF) break;
+		for (auto j = 0; j < run_len; j++) *dst_ptr++ = run_val;
 	}
+	return src_ptr - enc_buffer;
 }
 
 #if 0

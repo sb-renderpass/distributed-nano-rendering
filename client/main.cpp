@@ -164,8 +164,13 @@ auto log_result(float frame_time, const stream_t::result_t& r) -> void
 			if (r.stream_bitmask & (1 << i)) // Only log data for completed streams
 			{
 				fmt::print(
-					"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f}\n",
-					i, r.stats[i].pose_rtt_ns * 1e-6, r.stats[i].render_time_us * 1e-3, r.stats[i].stream_time_us * 1e-3);
+					"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f} | CR {:4.2f}\n",
+					i,
+					r.stats[i].pose_rtt_ns * 1e-6,
+					r.stats[i].render_time_us * 1e-3,
+					r.stats[i].stream_time_us * 1e-3,
+					r.stats[i].num_enc_bytes / static_cast<float>(frame_buffer_size)
+				);
 			}
 		}
 
@@ -281,12 +286,6 @@ auto main() -> int
 		const auto stream_render_data = create_stream_render_data(prev_stream_bitmask, prev_slice_bitmasks);
 		gl::update_data(
 			stream_render_buffer, stream_render_data.data(), stream_render_data.size());
-		/*
-		glNamedBufferSubData(
-			stream_render_buffer,
-			0, stream_render_data.size() * sizeof(stream_render_t),
-			stream_render_data.data());
-		*/
 		const auto slice_render_data = create_slice_render_data(prev_stream_bitmask);
 
 		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
@@ -314,10 +313,7 @@ auto main() -> int
 			std::transform(
 				std::cbegin(result.stats), std::cend(result.stats),
 				std::begin(prev_slice_bitmasks),
-				[](const auto& s)
-				{
-					return calculate_slice_bitmask(s.pkt_bitmask);
-				});
+				[](const auto& s) { return s.slice_bitmask; });
 		}
 
 		glUseProgram(program.handle);

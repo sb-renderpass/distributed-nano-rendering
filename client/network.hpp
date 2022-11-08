@@ -28,15 +28,8 @@ constexpr auto frame_buffer_width  = config::width;
 constexpr auto frame_buffer_height = config::height;
 constexpr auto frame_buffer_size   = frame_buffer_width * frame_buffer_height;
 constexpr auto slice_buffer_size   = frame_buffer_size / config::num_slices;
-
-constexpr auto num_pkts_per_slice  = static_cast<int>(std::ceil(static_cast<float>(slice_buffer_size) / config::pkt_buffer_size));
-constexpr auto num_pkts_per_frame  = num_pkts_per_slice * config::num_slices;
-constexpr auto last_seqnum         = num_pkts_per_frame - 1;
-constexpr auto last_pkt_bitmask    = (1ULL << last_seqnum);
-constexpr auto all_pkt_bitmask     = (1ULL << num_pkts_per_frame) - 1ULL;
-constexpr auto all_stream_bitmask  = (1U   << config::num_streams) - 1U;
-constexpr auto all_slice_bitmask   = (1U   << config::num_slices ) - 1U;
-
+constexpr auto all_stream_bitmask  = (1U << config::num_streams) - 1U;
+constexpr auto all_slice_bitmask   = (1U << config::num_slices ) - 1U;
 constexpr auto target_frame_time   = 1.0F / config::target_fps;
 constexpr auto timeout_us          = static_cast<int64_t>(target_frame_time * 1e6F);
 
@@ -46,31 +39,24 @@ auto get_timestamp_ns() -> uint64_t
 		std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 
-auto unpack_pkt_header(const uint8_t* buffer) -> pkt_header_t
+auto unpack_pkt_info(const uint8_t* buffer) -> std::tuple<int, int, int, int>
 {
-	const uint16_t frame_num = (buffer[0] << 8) | buffer[1];
-	const uint32_t padding   = (buffer[2] >> 7) & 0x01;
-	const uint32_t seqnum    = (buffer[2] >> 0) & 0x7F;
-	const uint32_t offset    = (buffer[3] << 16) | (buffer[4] << 8) | buffer[5];
-	return {frame_num, padding, seqnum, offset};
+	const auto frame_end = (buffer[0] >> 7) & 1;
+	const auto slice_end = (buffer[0] >> 6) & 1;
+	const auto slice_id  = (buffer[0] & 0x0F);
+	const auto pkt_id    = (buffer[1] & 0xFF);
+	return {frame_end, slice_end, slice_id, pkt_id};
 }
 
-auto get_pkt_footer(const uint8_t* buffer, int offset) -> pkt_footer_t
+auto unpack_slice_info(const uint8_t* buffer) -> slice_info_t
 {
-	return *reinterpret_cast<const pkt_footer_t*>(buffer + offset - sizeof(pkt_footer_t));
+	const auto num_pkts = buffer[0];
+	return {num_pkts};
 }
 
-auto calculate_slice_bitmask(uint64_t pkt_bitmask) -> uint32_t
+auto unpack_frame_info(const uint8_t* buffer, int offset) -> frame_info_t
 {
-	constexpr auto pkts_in_slice_mask = (1U << num_pkts_per_slice) - 1U;
-	auto slice_bitmask = 0U;
-	for (auto i = 0; i < config::num_slices; i++)
-	{
-		const auto match = (pkt_bitmask & pkts_in_slice_mask) == pkts_in_slice_mask;
-		slice_bitmask |= (match << i);
-		pkt_bitmask >>= num_pkts_per_slice;
-	}
-	return slice_bitmask;
+	return *reinterpret_cast<const frame_info_t*>(buffer + offset - sizeof(frame_info_t));
 }
 
 class stream_t
@@ -93,6 +79,7 @@ public:
  
 private:
 	std::vector<std::vector<uint8_t>>* frame_buffers; 
+	std::array<std::array<uint32_t, config::num_slices>, config::num_streams> pkt_bitmasks;
 
 	int sock {};
 	std::vector<sockaddr_in> server_addrs;
@@ -101,6 +88,7 @@ private:
 	std::atomic_flag drop_incoming_pkts;
 	std::atomic_flag stats_not_ready;
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
+	std::array<uint8_t, frame_buffer_size>       enc_buffer;
 	std::unordered_map<uint32_t, int> server_id_map;
 	result_t result {};
 	uint32_t complete_stream_bitmask {};
@@ -121,6 +109,8 @@ stream_t::stream_t(
 	std::vector<std::vector<uint8_t>>* frame_buffers)
 	: frame_buffers {frame_buffers}
 {
+	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
+
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0) throw std::runtime_error {"Failed to create stream socket!"};
 
@@ -160,7 +150,6 @@ stream_t::stream_t(
 		throw std::runtime_error {"Failed to bind to stream socket!"};
 	}
 
-	this->frame_buffers = frame_buffers;
 	drop_incoming_pkts.test_and_set();
 	stats_not_ready.test_and_set();
 
@@ -188,10 +177,13 @@ auto stream_t::stop() -> result_t
 	drop_incoming_pkts.test_and_set();
 	ready_promise = {};
 
+	// Reset packet counters
+	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
+
 	// Mark missing streams
 	for (auto i = 0; i < config::num_streams; i++)
 	{
-		if (result.stats[i].pkt_bitmask == 0) result.stream_bitmask &= ~(1U << i);
+		if (result.stats[i].slice_bitmask == 0) result.stream_bitmask &= ~(1U << i);
 	}
 
 	return std::exchange(result, {});
@@ -227,33 +219,52 @@ auto stream_t::recv_pkt() -> int
 
 auto stream_t::recv_thread_task() -> void
 {
-	//uint8_t enc_buffer[slice_buffer_size];
-
 	// TODO: Handle graceful exit
 	for (;;)
 	{
-		const auto server_id = recv_pkt();
-		if (drop_incoming_pkts.test() || server_id < 0) continue;
+		const auto stream_id = recv_pkt();
+		if (drop_incoming_pkts.test() || stream_id < 0) continue;
 
-		const auto header = unpack_pkt_header(pkt_buffer.data());
-		const auto footer = get_pkt_footer(pkt_buffer.data(), pkt_buffer.size());
+		const auto [frame_end, slice_end, slice_id, pkt_id] = unpack_pkt_info(pkt_buffer.data());
+		const auto slice_info = unpack_slice_info(pkt_buffer.data() + pkt_buffer.size() - sizeof(slice_info_t));
+		//std::clog << frame_end << ' ' << slice_end << ' ' << slice_id << ' ' << pkt_id << '\n';
 
-		const auto payload_size = pkt_buffer.size() - sizeof(pkt_header_t) - header.padding * footer.padding_len;
-		std::copy_n(pkt_buffer.data() + sizeof(pkt_header_t), payload_size, (*frame_buffers)[server_id].data() + header.offset);
+		constexpr auto pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info_t);
+		const auto pkt_offset = slice_id * slice_buffer_size + pkt_id * config::pkt_buffer_size;
+		std::copy_n(pkt_buffer.data() + sizeof(pkt_info_t), pkt_payload_size, enc_buffer.data() + pkt_offset);
 
-		result.stats[server_id].pkt_bitmask |= (1ULL << header.seqnum);
-		if (header.seqnum == last_seqnum && result.stats[server_id].pkt_bitmask == all_pkt_bitmask)
+		// Mark packet received for a slice
+		pkt_bitmasks[stream_id][slice_id] |= (1U << pkt_id);
+
+		// Mark slice complete if all of its packets have been received
+		const auto all_slice_pkts_bitmask = (1U << slice_info.num_pkts) - 1U;
+		const auto all_slice_pkts_recvd   = pkt_bitmasks[stream_id][slice_id] == all_slice_pkts_bitmask;
+		if (slice_end && all_slice_pkts_recvd)
 		{
+			result.stats[stream_id].slice_bitmask = (1U << slice_id);
+
+			// Decode slice once all packets have been received
+			const auto slice_offset = slice_id * slice_buffer_size;
+			auto in_buffer = enc_buffer.data() + slice_offset;
+			auto slice_buffer = (*frame_buffers)[stream_id].data() + slice_offset;
+			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, slice_buffer);
+		}
+
+		// Unpack frame stats from the last packet of the frame
+		const auto is_frame_end_pkt = frame_end && slice_end;
+		if (is_frame_end_pkt)
+		{
+			const auto frame_info = unpack_frame_info(pkt_buffer.data(), pkt_buffer.size() - sizeof(slice_info_t));
 			const auto pose_recv_timestamp = get_timestamp_ns();
-			const auto pose_rtt_ns = pose_recv_timestamp - footer.timestamp;
+			const auto pose_rtt_ns = pose_recv_timestamp - frame_info.timestamp;
 
-			result.stats[server_id].pose_rtt_ns    = pose_rtt_ns;
-			result.stats[server_id].render_time_us = footer.render_time_us;
-			result.stats[server_id].stream_time_us = footer.stream_time_us;
+			result.stats[stream_id].pose_rtt_ns    = pose_rtt_ns;
+			result.stats[stream_id].render_time_us = frame_info.render_time_us;
+			result.stats[stream_id].stream_time_us = frame_info.stream_time_us;
 
-			complete_stream_bitmask |= (1U << server_id);
+			complete_stream_bitmask |= (1U << stream_id);
 
-			// CODEC
+			// Encode-Decode Test
 			/*
 			constexpr auto W = config::height;
 			constexpr auto H = config::width / config::num_slices;
@@ -267,7 +278,7 @@ auto stream_t::recv_thread_task() -> void
 				const auto cr = (float)num_enc_bytes / slice_buffer_size;
 				std::clog << i << ' ' << cr << '\n';
 
-				codec::decode_slice(enc_buffer, num_enc_bytes, slice_buffer);
+				codec::decode_slice(enc_buffer, slice_buffer);
 
 				num_total_bytes += num_enc_bytes;
 			}

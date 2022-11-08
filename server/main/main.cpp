@@ -50,7 +50,7 @@ TaskHandle_t network_task_handle {nullptr};
 
 render_command_t cmd;
 
-frame_t slice[2];
+encoded_slice_t slice[2];
 
 struct pipeline_stats_t
 {
@@ -75,8 +75,9 @@ auto render_task(void* params) -> void
         for (auto slice_id = 0; slice_id < num_slices; slice_id++)
         {
             const auto slice_index = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
             render_elapsed -= esp_timer_get_time();
-            render_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
+            render_encode_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[slice_index]);
 
 			/*
             // CODEC
@@ -86,6 +87,7 @@ auto render_task(void* params) -> void
 			*/
 
             render_elapsed += esp_timer_get_time();
+
             if (slice_id == 0) xTaskNotifyGive(network_task_handle);
         }
 
@@ -95,14 +97,28 @@ auto render_task(void* params) -> void
     vTaskDelete(nullptr);
 }
 
-inline auto write_pkt_header(uint16_t frame_num, bool padding, uint8_t seqnum, uint32_t offset, uint8_t* buffer) -> void
+inline auto write_pkt_info(
+	int frame_end,
+	int slice_end,
+	int slice_id,
+	int pkt_id,
+	uint8_t* buffer) -> uint8_t*
 {
-    buffer[0] = frame_num >> 8;
-    buffer[1] = frame_num >> 0;
-    buffer[2] = (padding << 7) | (seqnum & 0x7F);
-    buffer[3] = offset >> 16;
-    buffer[4] = offset >>  8;
-    buffer[5] = offset;
+	*buffer++ = ((frame_end & 1) << 7) | ((slice_end & 1) << 6) | (slice_id & 0x0F);
+	*buffer++ = (pkt_id & 0xFF);
+	return buffer;
+}
+
+inline auto write_pkt_payload(const uint8_t* payload, int size, uint8_t* buffer) -> uint8_t*
+{
+	std::memcpy(buffer, payload, size);
+	return buffer + size;
+}
+
+inline auto write_slice_info(uint8_t num_pkts_in_slice, uint8_t* buffer) -> uint8_t*
+{
+	*buffer++ = num_pkts_in_slice;
+	return buffer;
 }
 
 auto network_task(void* params) -> void
@@ -177,24 +193,18 @@ auto network_task(void* params) -> void
         }
         ESP_LOGI(TAG, "Socket bound to port %d", PORT);
 
-        constexpr auto num_pkts_per_slice = static_cast<int>(std::ceil(static_cast<float>(slice_buffer_size) / pkt_buffer_size));
-        constexpr auto num_pkts_per_frame = num_pkts_per_slice * num_slices;
-        constexpr auto pkt_payload_size   = pkt_buffer_size - sizeof(pkt_header_t);
-        constexpr auto rem_size_per_slice = slice_buffer_size % pkt_payload_size;
-        ESP_LOGI(TAG, "num_pkts_per_frame=%d num_pkts_per_slice=%d rem_size_per_slice=%d",
-                num_pkts_per_frame, num_pkts_per_slice, rem_size_per_slice);
-
         for (;;)
         {
-            const int recv_nbytes = recvfrom(sock, &cmd, sizeof(cmd), 0, reinterpret_cast<struct sockaddr*>(&client_addr), &socklen);
+            const int recv_nbytes = recvfrom(
+				sock,
+				&cmd, sizeof(cmd), 0,
+				reinterpret_cast<struct sockaddr*>(&client_addr), &socklen);
+
             if (recv_nbytes == sizeof(cmd))
             {
                 auto slice_index = 0U;
                 xTaskNotify(render_task_handle, slice_index, eSetValueWithOverwrite);
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-                auto seqnum = 0U;
-                auto offset = 0U;
+				ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
                 auto network_elapsed = 0U;
 
@@ -202,49 +212,54 @@ auto network_task(void* params) -> void
                 {
                     if (slice_id < num_slices - 1) xTaskNotify(render_task_handle, !slice_index, eSetValueWithOverwrite);
 
+					auto last_wake_time = xTaskGetTickCount();
                     network_elapsed -= esp_timer_get_time();
 
-					/*
-					// CODEC
-					constexpr auto W = frame_buffer_height;
-					constexpr auto H = frame_buffer_width / num_slices;
-					codec::encode_slice(slice[slice_index].buffer, bitstream, W, H);
-					bitstream.flush();
-					bitstream.clear();
-					*/
+					const auto encoded_slice_size = slice[slice_index].size;
+					const auto num_pkts_in_slice = static_cast<int>(std::ceil(static_cast<float>(encoded_slice_size) / pkt_buffer_size));
+					const auto pkt_payload_size   = pkt_buffer_size - sizeof(pkt_info_t);
 
-                    for (auto i = 0; i < num_pkts_per_slice; i++)
+                    for (auto pkt_id = 0; pkt_id < num_pkts_in_slice; pkt_id++)
                     {
-                        const auto is_last_pkt = i == num_pkts_per_slice - 1;
-                        write_pkt_header(cmd.pose.num, is_last_pkt, seqnum, offset, pkt_buffer);
+						auto ptr = pkt_buffer;
 
-                        const auto payload_size = is_last_pkt ? rem_size_per_slice : pkt_payload_size;
-                        std::memcpy(pkt_buffer + sizeof(pkt_header_t), slice[slice_index].buffer + i * pkt_payload_size, payload_size);
+                        const auto is_frame_end = slice_id == num_slices - 1;
+                        const auto is_slice_end = pkt_id == num_pkts_in_slice - 1;
+                        ptr = write_pkt_info(is_frame_end, is_slice_end, slice_id, pkt_id, ptr);
+						ptr = write_pkt_payload(slice[slice_index].buffer + pkt_id * pkt_payload_size, pkt_payload_size, ptr);
 
-                        using padding_t = uint16_t;
+                        if (is_slice_end)
+						{
+							write_slice_info(num_pkts_in_slice, pkt_buffer + pkt_buffer_size - sizeof(slice_info_t));
+						}
 
-                        if (is_last_pkt)
+						const auto is_frame_end_pkt = is_frame_end && is_slice_end;
+						if (is_frame_end_pkt)
                         {
-                            constexpr auto padding = static_cast<padding_t>(pkt_payload_size - rem_size_per_slice);
-                            std::memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t), &padding, sizeof(padding_t));
+                            std::memcpy(
+								pkt_buffer + pkt_buffer_size - sizeof(slice_info_t) - sizeof(cmd.pose.ts) - sizeof(pipeline_stats),
+								&pipeline_stats,
+								sizeof(pipeline_stats));
+                            std::memcpy(
+								pkt_buffer + pkt_buffer_size - sizeof(slice_info_t) - sizeof(cmd.pose.ts),
+								&cmd.pose.ts,
+								sizeof(cmd.pose.ts));
                         }
 
-                        if (seqnum == num_pkts_per_frame - 1)
-                        {
-                            memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t) - sizeof(cmd.pose.ts) - sizeof(pipeline_stats),
-                                    &pipeline_stats, sizeof(pipeline_stats));
-                            memcpy(pkt_buffer + pkt_buffer_size - sizeof(padding_t) - sizeof(cmd.pose.ts), &cmd.pose.ts, sizeof(cmd.pose.ts));
-                        }
+                        sendto(
+							sock,
+							pkt_buffer, pkt_buffer_size, 0,
+							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
+                    } // for(pkt_id)
 
-                        sendto(sock, pkt_buffer, pkt_buffer_size, 0, reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
+                    // HACK: Delay network thread to always be slower than render
+                    //vTaskDelay(pdMS_TO_TICKS(2));
+                    vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(3));
 
-                        seqnum++;
-                        offset += payload_size;
-                    }
-                    slice_index = !slice_index;
+                    slice_index = !slice_index; // Swap slice buffers for render and stream threads
 
                     network_elapsed += esp_timer_get_time();
-                }
+                } // for(slice_id)
 
                 pipeline_stats.network_elapsed = network_elapsed;
             }

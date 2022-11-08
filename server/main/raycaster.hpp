@@ -15,7 +15,7 @@ struct texture_cache_t
     int row_id {-1};
     uint8_t data[size] = {0};
 
-    constexpr auto update(int tex_id_, int row_id_)
+    auto update(int tex_id_, int row_id_) -> void
     {
         if (tex_id_ != tex_id || row_id_ != row_id)
         {
@@ -91,6 +91,7 @@ auto init_renderer(int frame_buffer_width, int frame_buffer_height) -> void
     }
 }
 
+/*
 struct bs_t
 {
 	uint8_t* head  {nullptr};
@@ -108,17 +109,18 @@ inline auto bitstream_write(int value, int count, bs_t& bs) -> void
 	bs.cache = tmp;
 	bs.nbits = new_nbits & (8 - 1);
 }
+*/
 
-auto render_slice(
+auto render_encode_slice(
     const render_command_t& cmd,
     int slice_start,
     int slice_stop,
-    frame_t& frame) -> void
+    encoded_slice_t& frame) -> void
 {
     texture_cache_t<texture_height> tex_cache;
 
-	auto est_enc_bytes = 0;
-	bs_t bs {frame.buffer};
+	//bs_t bs {frame.buffer};
+	auto dst_ptr = frame.buffer;
 
     const auto x_scale = cmd.tile.x_scale / frame.width;
     for (auto x = slice_start, i = 0; x < slice_stop; x++, i++)
@@ -203,8 +205,8 @@ auto render_slice(
 		const auto tex_v_step = static_cast<float>(texture_height) / row_id_height;
 		auto tex_v = (row_id_start - (frame.height - row_id_height) / 2) * tex_v_step;
 
-		auto run_color = 0;
-		auto run_len = -1;
+		auto run_val = 0;
+		auto run_len = 0;
 
         for (auto j = 0; j < frame.height; j++)
 		{
@@ -212,54 +214,51 @@ auto render_slice(
 			if (j < row_id_start)
 			{
                 constexpr auto sky_color_rgb233 = 0b00010011;
-				//frame.buffer[j + i * frame.height] = sky_color_rgb233;
 				color = sky_color_rgb233;
 			}
 			else if (j > row_id_stop)
 			{
                 constexpr auto gnd_color_rgb233 = 0b00010000;
-				//frame.buffer[j + i * frame.height] = gnd_color_rgb233;
 				color = gnd_color_rgb233;
 			}
 			else
 			{
-				//frame.buffer[j + i * frame.height] = 0xFF;
-
                 const auto tex_y = static_cast<int>(tex_v) & (texture_height - 1);
                 tex_v += tex_v_step;
-
-                const auto wall_color = tex_cache.data[tex_y];
-                //frame.buffer[j + i * frame.height] = wall_color;
-				color = wall_color;
+                color = tex_cache.data[tex_y];
 			}
 
 			// CODEC
 			if (run_len == 0)
 			{
-				run_color = color;
+				run_val = color;
 				run_len = 1;
 			}
-			else if (color == run_color)
+			else if (color == run_val)
 			{
 				run_len++;
 			}
 			else
 			{
-				// TODO: Store run_color, run_len
-				bitstream_write(run_color, 8, bs);
-				bitstream_write(run_len,   8, bs);
-				est_enc_bytes += 2;
+				// TODO: Store run_val, run_len
+				//bitstream_write(run_val, 8, bs);
+				//bitstream_write(run_len, 8, bs);
+				*dst_ptr++ = run_val;
+				*dst_ptr++ = run_len;
+				run_val = color;
 				run_len = 1;
-				run_color = color;
 			}
-
-			frame.buffer[j + i * frame.height] = color;
 		} //for(j)
-		// TODO: Store run_color, run_len
+
+		*dst_ptr++ = run_val;
+		*dst_ptr++ = run_len;
 	} // for(i)
 
-	//const auto sz = 320/2 * 240/4;
-	//ESP_LOGI("server", ">>> %d %d %f", est_enc_bytes, sz, (float)est_enc_bytes/(float)sz);
+	// Terminate encoded stream
+	*dst_ptr++ = 0xFF;
+	*dst_ptr++ = 0xFF;
+
+	frame.size = dst_ptr - frame.buffer;
 }
 
 #if 0
