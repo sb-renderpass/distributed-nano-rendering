@@ -92,26 +92,6 @@ auto init_renderer(int frame_buffer_width, int frame_buffer_height) -> void
     }
 }
 
-/*
-struct bs_t
-{
-	uint8_t* head  {nullptr};
-	uint8_t  cache {0};
-	uint8_t  nbits {0};
-};
-
-__attribute__((always_inline))
-inline auto bitstream_write(int value, int count, bs_t& bs) -> void
-{
-	const uint16_t tmp = value << (8 - bs.nbits);
-	bs.cache |= (tmp >> 8);
-	const auto new_nbits = bs.nbits + count;
-	if (new_nbits >= 8) *bs.head++ = bs.cache;
-	bs.cache = tmp;
-	bs.nbits = new_nbits & (8 - 1);
-}
-*/
-
 auto render_encode_slice(
     const render_command_t& cmd,
     int slice_start,
@@ -120,8 +100,10 @@ auto render_encode_slice(
 {
     texture_cache_t<texture_height> tex_cache;
 
-	//bs_t bs {frame.buffer};
 	auto dst_ptr = frame.buffer;
+
+	auto run_val = 0;
+	auto run_len = 0;
 
     const auto x_scale = cmd.tile.x_scale / frame.width;
     for (auto x = slice_start, i = 0; x < slice_stop; x++, i++)
@@ -206,9 +188,6 @@ auto render_encode_slice(
 		const auto tex_v_step = static_cast<float>(texture_height) / row_id_height;
 		auto tex_v = (row_id_start - (frame.height - row_id_height) / 2) * tex_v_step;
 
-		auto run_val = 0;
-		auto run_len = 0;
-
         for (auto j = 0; j < frame.height; j++)
 		{
 			auto color = 0;
@@ -241,19 +220,17 @@ auto render_encode_slice(
 			}
 			else
 			{
-				// TODO: Store run_val, run_len
-				//bitstream_write(run_val, 8, bs);
-				//bitstream_write(run_len, 8, bs);
 				*dst_ptr++ = run_val;
 				*dst_ptr++ = run_len;
 				run_val = color;
 				run_len = 1;
 			}
 		} //for(j)
-
-		*dst_ptr++ = run_val;
-		*dst_ptr++ = run_len;
 	} // for(i)
+
+	// Add last run
+	*dst_ptr++ = run_val;
+	*dst_ptr++ = run_len;
 
 	// Terminate stream with special symbol
 	*dst_ptr++ = codec::stream_end_symbol;
