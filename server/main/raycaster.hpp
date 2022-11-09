@@ -102,9 +102,6 @@ auto render_encode_slice(
 
 	auto dst_ptr = frame.buffer;
 
-	auto run_val = 0;
-	auto run_len = 0;
-
     const auto x_scale = cmd.tile.x_scale / frame.width;
     for (auto x = slice_start, i = 0; x < slice_stop; x++, i++)
     {
@@ -146,11 +143,11 @@ auto render_encode_slice(
             side_dist_y = (map_y + 1.0F - cmd.pose.pos_y) * delta_dist_y;
         }
 
-        auto front_side = true;
+        auto is_front_side = true;
         auto hit = 0;
         while (
-                (0 <= map_x) && (map_x < map_size_x) &&
-                (0 <= map_y) && (map_y < map_size_y))
+			(0 <= map_x) && (map_x < map_size_x) &&
+			(0 <= map_y) && (map_y < map_size_y))
         {
             hit = world_map[map_x][map_y];
             if (hit > 0) break;
@@ -159,44 +156,47 @@ auto render_encode_slice(
             {
                 side_dist_x += delta_dist_x;
                 map_x += step_x;
-                front_side = false;
+                is_front_side = false;
             }
             else
             {
                 side_dist_y += delta_dist_y;
                 map_y += step_y;
-                front_side = true;
+                is_front_side = true;
             }
         }
 
-		const auto perp_wall_dist = std::max(front_side ? (side_dist_y - delta_dist_y) : (side_dist_x - delta_dist_x), 0.1F);
-		const auto row_id_height = static_cast<int>(frame.height / perp_wall_dist);
-		const auto row_id_start = std::max((frame.height - row_id_height) / 2, 0);
-		const auto row_id_stop  = std::min((frame.height + row_id_height) / 2, frame.height);
+		const auto hit_dist   = std::max(is_front_side ? (side_dist_y - delta_dist_y) : (side_dist_x - delta_dist_x), 0.1F);
+		const auto wall_len   = static_cast<int>(frame.height / hit_dist);
+		const auto wall_start = std::max((frame.height - wall_len) / 2, 0);
+		const auto wall_stop  = std::min((frame.height + wall_len) / 2, frame.height);
 
-		auto tex_u = front_side ?
-			cmd.pose.pos_x + perp_wall_dist * ray_dir_x :
-			cmd.pose.pos_y + perp_wall_dist * ray_dir_y;
+		auto tex_u = is_front_side ?
+			cmd.pose.pos_x + hit_dist * ray_dir_x :
+			cmd.pose.pos_y + hit_dist * ray_dir_y;
 		tex_u -= int(tex_u);
 
 		auto tex_x = int(tex_u * texture_width);
-		if ((!front_side && ray_dir_x > 0) && (front_side && ray_dir_y < 0)) tex_x = texture_width - 1 - tex_x;
+		if ((!is_front_side && ray_dir_x > 0) && (is_front_side && ray_dir_y < 0)) tex_x = texture_width - 1 - tex_x;
 
 		const auto tex_id = hit - 1;
 		tex_cache.update(tex_id, tex_x);
 
-		const auto tex_v_step = static_cast<float>(texture_height) / row_id_height;
-		auto tex_v = (row_id_start - (frame.height - row_id_height) / 2) * tex_v_step;
+		const auto tex_v_step = static_cast<float>(texture_height) / wall_len;
+		auto tex_v = (wall_start - (frame.height - wall_len) / 2) * tex_v_step;
+
+		auto run_val = 0;
+		auto run_len = 0;
 
         for (auto j = 0; j < frame.height; j++)
 		{
 			auto color = 0;
-			if (j < row_id_start)
+			if (j < wall_start)
 			{
                 constexpr auto sky_color_rgb233 = 0b00010011;
 				color = sky_color_rgb233;
 			}
-			else if (j > row_id_stop)
+			else if (j > wall_stop)
 			{
                 constexpr auto gnd_color_rgb233 = 0b00010000;
 				color = gnd_color_rgb233;
@@ -206,9 +206,10 @@ auto render_encode_slice(
                 const auto tex_y = static_cast<int>(tex_v) & (texture_height - 1);
                 tex_v += tex_v_step;
                 color = tex_cache.data[tex_y];
+				//color = texture_map[hit - 1][tex_y + tex_x * texture_width];
 			}
 
-			// CODEC
+			// Run-length encode rendered color
 			if (run_len == 0)
 			{
 				run_val = color;
@@ -226,11 +227,11 @@ auto render_encode_slice(
 				run_len = 1;
 			}
 		} //for(j)
-	} // for(i)
 
-	// Add last run
-	*dst_ptr++ = run_val;
-	*dst_ptr++ = run_len;
+		// Add last run
+		*dst_ptr++ = run_val;
+		*dst_ptr++ = run_len;
+	} // for(i)
 
 	// Terminate stream with special symbol
 	*dst_ptr++ = codec::stream_end_symbol;
@@ -242,7 +243,7 @@ auto render_encode_slice(
 #if 0
         if (hit > 0)
         {
-            const auto perp_wall_dist = std::max(front_side ? (side_dist_y - delta_dist_y) : (side_dist_x - delta_dist_x), 0.1F);
+            const auto perp_wall_dist = std::max(is_front_side ? (side_dist_y - delta_dist_y) : (side_dist_x - delta_dist_x), 0.1F);
 
             const auto row_id_height = static_cast<int>(frame.height / perp_wall_dist);
 
@@ -259,13 +260,13 @@ auto render_encode_slice(
                 //frame.buffer[(frame.height - 1 - j) + i * frame.height] = floor_colors[j];
             }
 
-            auto tex_u = front_side ?
+            auto tex_u = is_front_side ?
                 cmd.pose.pos_x + perp_wall_dist * ray_dir_x :
                 cmd.pose.pos_y + perp_wall_dist * ray_dir_y;
             tex_u -= int(tex_u);
 
             auto tex_x = int(tex_u * texture_width);
-            if ((!front_side && ray_dir_x > 0) && (front_side && ray_dir_y < 0)) tex_x = texture_width - 1 - tex_x;
+            if ((!is_front_side && ray_dir_x > 0) && (is_front_side && ray_dir_y < 0)) tex_x = texture_width - 1 - tex_x;
 
             const auto tex_id = hit - 1;
             tex_cache.update(tex_id, tex_x);
@@ -292,7 +293,7 @@ auto render_encode_slice(
                 //const auto wall_color = texture_map[hit - 1][tex_y + tex_x * texture_height];
                 const auto wall_color = tex_cache.data[tex_y];
                 frame.buffer[j + i * frame.height] = wall_color;
-                //frame.buffer[j + i * frame.height] = wall_color >> (!front_side);
+                //frame.buffer[j + i * frame.height] = wall_color >> (!is_front_side);
                 //frame.buffer[j + i * frame.height] = wall_color >> dist;
 
                 /*
@@ -304,7 +305,7 @@ auto render_encode_slice(
                 const auto r1  = (q11 >> 1) + (q21 >> 1);
                 const auto r2  = (q12 >> 1) + (q22 >> 1);
                 const auto p   = (r1  >> 1) + (r2  >> 1);
-                frame.buffer[j + i * frame.height] = p >> (!front_side);
+                frame.buffer[j + i * frame.height] = p >> (!is_front_side);
                 */
 
                 //zbuffer[x] = perp_wall_dist;

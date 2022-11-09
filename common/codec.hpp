@@ -63,12 +63,10 @@ inline auto encode(uint8_t r, uint8_t g, uint8_t b, uint8_t x) -> int
 auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H) -> int
 {
 	auto dst_ptr = enc_buffer;
-
-	auto run_val = 0;
-	auto run_len = 0;
-
 	for (auto i = 0; i < H; i++)
 	{
+		auto run_val = 0;
+		auto run_len = 0;
 		for (auto j = 0; j < W; j++)
 		{
 			const auto value = *slice_buffer++;
@@ -89,12 +87,10 @@ auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H
 				run_len = 1;
 			}
 		}
+		// Add last run
+		*dst_ptr++ = run_val;
+		*dst_ptr++ = run_len;
 	}
-
-	// Add last run
-	*dst_ptr++ = run_val;
-	*dst_ptr++ = run_len;
-
 	// Terminate stream with special symbol
 	*dst_ptr++ = stream_end_symbol;
 	*dst_ptr++ = stream_end_symbol;
