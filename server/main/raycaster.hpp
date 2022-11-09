@@ -57,10 +57,6 @@ constexpr uint8_t world_map[map_size_x][map_size_y] = {
     {2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 5, 5, 5, 5, 5, 5, 5, 5, 5},
 };
 
-uint8_t floor_colors[256];
-
-float zbuffer[320]; // TODO: Paramterize
-
 [[maybe_unused]]
 inline constexpr auto gray_to_rgb332(uint8_t x)
 {
@@ -77,19 +73,16 @@ inline constexpr auto gray_to_rgb233(uint8_t x)
     return (msb2 << 6) | (msb3 << 3) | msb3;
 }
 
+//float zbuffer[320]; // TODO: Paramterize
+float view_distances[240]; // TODO: Paramterize
+
 auto init_renderer(int frame_buffer_width, int frame_buffer_height) -> void
 {
-    constexpr auto base_floor_color = 0x30;
-    const auto floor_dist_scale = 1.0F / frame_buffer_height;
     for (auto i = 0; i < frame_buffer_height; i++)
-    {
-        floor_colors[i] = gray_to_rgb233(base_floor_color - static_cast<uint8_t>(i * floor_dist_scale * base_floor_color));
-    }
-
-    for (auto i = 0; i < frame_buffer_width; i++)
-    {
-        zbuffer[i] = 1e9F;
-    }
+	{
+		view_distances[i] = frame_buffer_height / (2.0F * i - frame_buffer_height);
+	}
+    //for (auto i = 0; i < frame_buffer_width; i++) zbuffer[i] = 1e9F;
 }
 
 auto render_encode_slice(
@@ -185,6 +178,31 @@ auto render_encode_slice(
 		const auto tex_v_step = static_cast<float>(texture_height) / wall_len;
 		auto tex_v = (wall_start - (frame.height - wall_len) / 2) * tex_v_step;
 
+		// Vertical floor casting
+		auto floor_x = 0.0F;
+		auto floor_y = 0.0F;
+		if (!is_front_side && ray_dir_x > 0)
+		{
+			floor_x = map_x;
+			floor_y = map_y + tex_u;
+		}
+		else if (!is_front_side && ray_dir_x < 0)
+		{
+			floor_x = map_x + 1.0F;
+			floor_y = map_y + tex_u;
+		}
+		else if (is_front_side && ray_dir_x > 0)
+		{
+			floor_x = map_x + tex_u;
+			floor_y = map_y;
+		}
+		else
+		{
+			floor_x = map_x + tex_u;
+			floor_y = map_y + 1.0F;
+		}
+		const auto inv_hit_dist = 1.0F / hit_dist;
+
 		auto run_val = 0;
 		auto run_len = 0;
 
@@ -193,13 +211,24 @@ auto render_encode_slice(
 			auto color = 0;
 			if (j < wall_start)
 			{
-                constexpr auto sky_color_rgb233 = 0b00010011;
+                constexpr auto sky_color_rgb233 = 0b00010011; // Sky blue
 				color = sky_color_rgb233;
 			}
 			else if (j > wall_stop)
 			{
-                constexpr auto gnd_color_rgb233 = 0b00010000;
+                //constexpr auto gnd_color_rgb233 = 0b00010000; // Leaf green
+                //constexpr auto gnd_color_rgb233 = 0b01001001; // Mud brown
+                constexpr auto gnd_color_rgb233 = 0b01010010; // Gray
 				color = gnd_color_rgb233;
+
+				const auto wt0 = view_distances[j] * inv_hit_dist;
+				const auto wt1 = 1.0F - wt0;
+				const auto fx = wt0 * floor_x + wt1 * cmd.pose.pos_x;
+				const auto fy = wt0 * floor_y + wt1 * cmd.pose.pos_y;
+				const auto fu = static_cast<int>(fx * texture_width ) & 0x3F;
+				const auto fv = static_cast<int>(fy * texture_height) & 0x3F;
+                color = gnd_color_rgb233 * ((fu & 0xF) && (fv & 0xF)); // Checkerboard
+				//color = texture_map[3][fv + fu * texture_width]; // Texture mapping
 			}
 			else
 			{

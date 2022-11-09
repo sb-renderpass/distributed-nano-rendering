@@ -80,7 +80,7 @@ auto render_task(void* params) -> void
             render_elapsed += esp_timer_get_time();
 
 			// FIXME: Hack to ensure render thread is always slower than network thread
-			vTaskDelay(pdMS_TO_TICKS(2));
+			//vTaskDelay(pdMS_TO_TICKS(2));
 
 			// Notify network thread to stream rendered slice and swap slice buffers
 			xTaskNotify(stream_task_handle, index, eSetValueWithOverwrite);
