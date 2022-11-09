@@ -171,15 +171,17 @@ auto stream_t::start(const std::vector<render_command_t>& cmds) -> std::future<v
 	for (auto&& x : result.stats) x.slice_bitmask = 0;
 	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
 
-	for (auto i = 0; i < cmds.size(); i++) send_render_command(cmds[i], i);
+	// Re-enable packet reception and send pose to servers to start frame render
 	drop_incoming_pkts.clear();
+	for (auto i = 0; i < cmds.size(); i++) send_render_command(cmds[i], i);
+
+	ready_promise = {};
 	return ready_promise.get_future();
 }
 
 auto stream_t::stop() -> result_t
 {
 	drop_incoming_pkts.test_and_set();
-	ready_promise = {};
 
 	// Mark missing streams
 	for (auto i = 0; i < config::num_streams; i++)

@@ -22,7 +22,7 @@ constexpr auto render_scale_h	= 2;
 
 constexpr auto pkt_buffer_size	= 1440;
 constexpr auto num_slices		= 4;
-constexpr auto num_streams		= 1;
+constexpr auto num_streams		= 2;
 
 constexpr auto sprint_speed		= 0.1F;
 constexpr auto strafe_speed		= 0.1F;
