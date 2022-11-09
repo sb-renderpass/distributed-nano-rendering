@@ -299,10 +299,8 @@ auto main() -> int
 		{
 			gl::update_data(frame_buffer_texture, frame_buffers[i].data(), i);
 			/*
-			if (const auto pkt_bitmask = result.stats[i].pkt_bitmask;
-				pkt_bitmask != all_pkt_bitmask)
-				fmt::print("{:028b} {:04b} {:02b}\n",
-					pkt_bitmask, calculate_slice_bitmask(pkt_bitmask), result.stream_bitmask);
+			if (const auto bm = result.stats[i].slice_bitmask; bm != all_slice_bitmask)
+				fmt::print("{:02b} {:016b}\n", result.stream_bitmask, bm);
 			*/
 		}
 		log_result(frame_time, result);

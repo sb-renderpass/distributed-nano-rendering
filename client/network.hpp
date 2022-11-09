@@ -91,7 +91,7 @@ private:
 	std::array<uint8_t, frame_buffer_size>       enc_buffer;
 	std::unordered_map<uint32_t, int> server_id_map;
 	result_t result {};
-	uint32_t complete_stream_bitmask {};
+	uint32_t active_stream_bitmask {};
 	std::promise<void> ready_promise;
 
 	auto send_render_command(const render_command_t& cmd, int server_id) -> int;
@@ -165,8 +165,12 @@ stream_t::stream_t(
 
 auto stream_t::start(const std::vector<render_command_t>& cmds) -> std::future<void>
 {
-	complete_stream_bitmask = 0U; // Reset
+	// Reset system state
+	active_stream_bitmask = 0;
 	result.stream_bitmask = all_stream_bitmask;
+	for (auto&& x : result.stats) x.slice_bitmask = 0;
+	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
+
 	for (auto i = 0; i < cmds.size(); i++) send_render_command(cmds[i], i);
 	drop_incoming_pkts.clear();
 	return ready_promise.get_future();
@@ -176,9 +180,6 @@ auto stream_t::stop() -> result_t
 {
 	drop_incoming_pkts.test_and_set();
 	ready_promise = {};
-
-	// Reset packet counters
-	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
 
 	// Mark missing streams
 	for (auto i = 0; i < config::num_streams; i++)
@@ -241,7 +242,7 @@ auto stream_t::recv_thread_task() -> void
 		const auto all_slice_pkts_recvd   = pkt_bitmasks[stream_id][slice_id] == all_slice_pkts_bitmask;
 		if (slice_end && all_slice_pkts_recvd)
 		{
-			result.stats[stream_id].slice_bitmask = (1U << slice_id);
+			result.stats[stream_id].slice_bitmask |= (1U << slice_id);
 
 			// Decode slice once all packets have been received
 			const auto slice_offset = slice_id * slice_buffer_size;
@@ -262,7 +263,7 @@ auto stream_t::recv_thread_task() -> void
 			result.stats[stream_id].render_time_us = frame_info.render_time_us;
 			result.stats[stream_id].stream_time_us = frame_info.stream_time_us;
 
-			complete_stream_bitmask |= (1U << stream_id);
+			active_stream_bitmask |= (1U << stream_id);
 
 			// Encode-Decode Test
 			/*
@@ -289,6 +290,6 @@ auto stream_t::recv_thread_task() -> void
 		}
 
 		// Early exit when all frames are received
-		if (complete_stream_bitmask == all_stream_bitmask) ready_promise.set_value();
+		if (active_stream_bitmask == all_stream_bitmask) ready_promise.set_value();
 	}
 }
