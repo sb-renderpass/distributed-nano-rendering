@@ -178,6 +178,7 @@ auto render_encode_slice(
 		const auto tex_v_step = static_cast<float>(texture_height) / wall_len;
 		auto tex_v = (wall_start - (frame.height - wall_len) / 2) * tex_v_step;
 
+		/*
 		// Vertical floor casting
 		auto floor_x = 0.0F;
 		auto floor_y = 0.0F;
@@ -202,6 +203,7 @@ auto render_encode_slice(
 			floor_y = map_y + 1.0F;
 		}
 		const auto inv_hit_dist = 1.0F / hit_dist;
+		*/
 
 		auto run_val = 0;
 		auto run_len = 0;
@@ -216,11 +218,12 @@ auto render_encode_slice(
 			}
 			else if (j > wall_stop)
 			{
-                //constexpr auto gnd_color_rgb233 = 0b00010000; // Leaf green
+                constexpr auto gnd_color_rgb233 = 0b00010000; // Leaf green
                 //constexpr auto gnd_color_rgb233 = 0b01001001; // Mud brown
-                constexpr auto gnd_color_rgb233 = 0b01010010; // Gray
+                //constexpr auto gnd_color_rgb233 = 0b01010010; // Gray
 				color = gnd_color_rgb233;
 
+				/*
 				const auto wt0 = view_distances[j] * inv_hit_dist;
 				const auto wt1 = 1.0F - wt0;
 				const auto fx = wt0 * floor_x + wt1 * cmd.pose.pos_x;
@@ -229,6 +232,7 @@ auto render_encode_slice(
 				const auto fv = static_cast<int>(fy * texture_height) & 0x3F;
                 color = gnd_color_rgb233 * ((fu & 0xF) && (fv & 0xF)); // Checkerboard
 				//color = texture_map[3][fv + fu * texture_width]; // Texture mapping
+				*/
 			}
 			else
 			{

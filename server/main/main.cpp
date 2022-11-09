@@ -34,7 +34,7 @@ static const char *TAG = "server";
 namespace
 {
 
-constexpr auto frame_buffer_width  = 320;
+constexpr auto frame_buffer_width  = 320 / 2;
 constexpr auto frame_buffer_height = 240;
 constexpr auto pkt_buffer_size     = 1440;
 constexpr auto num_slices          = 4;
@@ -80,7 +80,7 @@ auto render_task(void* params) -> void
             render_elapsed += esp_timer_get_time();
 
 			// FIXME: Hack to ensure render thread is always slower than network thread
-			//vTaskDelay(pdMS_TO_TICKS(2));
+			vTaskDelay(pdMS_TO_TICKS(2));
 
 			// Notify network thread to stream rendered slice and swap slice buffers
 			xTaskNotify(stream_task_handle, index, eSetValueWithOverwrite);

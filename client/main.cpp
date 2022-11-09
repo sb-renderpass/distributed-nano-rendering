@@ -237,12 +237,10 @@ auto main() -> int
 		.build();
 
 	std::array<uint32_t, 4> indices {{0, 1, 2, 3}};
-	GLuint ibo {GL_NONE};
-	glCreateBuffers(1, &ibo);
-	glNamedBufferStorage(ibo, indices.size() * sizeof(indices[0]), indices.data(), GL_DYNAMIC_STORAGE_BIT);
+	const auto index_buffer = gl::create_buffer<uint32_t>(indices.size(), indices.data());
 	GLuint vao {GL_NONE};
 	glCreateVertexArrays(1, &vao);
-	glVertexArrayElementBuffer(vao, ibo);
+	glVertexArrayElementBuffer(vao, index_buffer.handle);
 
 	const auto stream_render_buffer = gl::create_buffer<stream_render_t>(config::num_streams);
 	gl::bind_buffer(stream_render_buffer, 0);
@@ -332,6 +330,11 @@ auto main() -> int
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 	}
+
+	gl::delete_buffer(stream_render_buffer);
+	gl::delete_buffer(index_buffer);
+	gl::delete_texture(frame_buffer_texture);
+	gl::delete_program(program);
 
 	glfwDestroyWindow(window);
 	glfwTerminate();

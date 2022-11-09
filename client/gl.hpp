@@ -75,9 +75,14 @@ private:
 	std::vector<shader_t> shaders_;
 };
 
+auto delete_program(const program_t& program) -> void
+{
+	glDeleteProgram(program.handle);
+}
+
 struct texel_t
 {
-	GLenum format {GL_RED};
+	GLenum format {GL_RED_INTEGER};
 	GLenum type   {GL_UNSIGNED_BYTE};
 };
 
@@ -161,6 +166,8 @@ public:
 				break;
 		}
 
+		texture.texel = {GL_RED_INTEGER, GL_UNSIGNED_BYTE};
+
 		if (data)
 		{
 			for (auto i = 0; i < depth; i++)
@@ -169,7 +176,6 @@ public:
 			}
 		}
 
-		texture.texel = {GL_RED_INTEGER, GL_UNSIGNED_BYTE};
 		return texture;
 	}
 
@@ -180,6 +186,11 @@ private:
 	const uint8_t* data {nullptr};
 	GLenum type {GL_TEXTURE_2D};
 };
+
+auto delete_texture(const texture_t& texture) -> void
+{
+	glDeleteTextures(1, &texture.handle);
+}
 
 struct buffer_t
 {
@@ -197,6 +208,11 @@ auto create_buffer(int capacity, T* data = nullptr) -> buffer_t
 		data,
 		GL_DYNAMIC_STORAGE_BIT);
 	return buffer;
+}
+
+auto delete_buffer(const buffer_t& buffer) -> void
+{
+	glDeleteBuffers(1, &buffer.handle);
 }
 
 template <typename T = uint8_t>
