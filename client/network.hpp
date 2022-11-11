@@ -256,7 +256,7 @@ auto stream_t::recv_thread_task() -> void
 			const auto slice_offset  = slice_id  * slice_buffer_size;
 			auto in_buffer  = enc_buffer.data() + stream_offset + slice_offset;
 			auto out_buffer = screen_buffer     + stream_offset + slice_offset;
-			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, out_buffer);
+			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, out_buffer, slice_buffer_size);
 		}
 
 		// Unpack frame stats from the last packet of the frame
