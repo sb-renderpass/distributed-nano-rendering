@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring> // memset
 #include <future>
+#include <functional>
 #include <iostream>
 #include <pthread.h>
 #include <thread>
@@ -72,21 +73,21 @@ public:
 
 	stream_t(
 		const std::vector<server_t>& server_addr,
-		std::vector<std::vector<uint8_t>>* frame_buffers);
+		std::vector<std::vector<uint8_t>>* out_buffers);
 
 	auto start(const std::vector<render_command_t>& cmds) -> std::future<void>;
 	auto stop() -> result_t;
  
 private:
-	std::vector<std::vector<uint8_t>>* frame_buffers; 
+	std::vector<std::vector<uint8_t>>* out_buffers;
 	std::array<std::array<uint32_t, config::num_slices>, config::num_streams> pkt_bitmasks;
 
 	int sock {};
 	std::vector<sockaddr_in> server_addrs;
 	sockaddr_in client_addr;
-	std::jthread recv_thread;
+	std::thread recv_thread;
 	std::atomic_flag drop_incoming_pkts;
-	std::atomic_flag stats_not_ready;
+	std::atomic_flag is_running; // TODO: Use std::stop_token
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
 	std::array<std::array<uint8_t, frame_buffer_size>, config::num_streams> enc_buffer;
 	std::unordered_map<uint32_t, int> server_id_map;
@@ -101,21 +102,23 @@ private:
 
 stream_t::~stream_t()
 {
+	is_running.clear();
+	recv_thread.join();
 	close(sock);
 }
 
 stream_t::stream_t(
 	const std::vector<server_t>& servers,
-	std::vector<std::vector<uint8_t>>* frame_buffers)
-	: frame_buffers {frame_buffers}
+	std::vector<std::vector<uint8_t>>* out_buffers)
+	: out_buffers {out_buffers}
 {
 	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
 
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0) throw std::runtime_error {"Failed to create stream socket!"};
 
-	//const auto recv_timeout = timeval { .tv_usec = timeout_us, };
-	//setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
+	const auto recv_timeout = timeval { .tv_sec = 1, };
+	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
 	constexpr auto priority = 6 << 7;
 	setsockopt(sock, IPPROTO_IP, IP_TOS, &priority, sizeof(priority));
@@ -151,12 +154,12 @@ stream_t::stream_t(
 	}
 
 	drop_incoming_pkts.test_and_set();
-	stats_not_ready.test_and_set();
+	is_running.test_and_set();
 
 	cpu_set_t cpu_set;
 	CPU_ZERO(&cpu_set);
 	CPU_SET(1, &cpu_set);
-	recv_thread = std::jthread {[this](){ recv_thread_task(); }};
+	recv_thread = std::thread {[this](){ recv_thread_task(); }};
 	if (pthread_setaffinity_np(recv_thread.native_handle(), sizeof(cpu_set), &cpu_set) != 0)
 	{
 		std::cerr << "Failed to set recv-thread affinity!\n";
@@ -209,21 +212,20 @@ auto stream_t::recv_pkt() -> int
 	const auto nbytes = recvfrom(
 		sock, pkt_buffer.data(), pkt_buffer.size(), 0,
 		reinterpret_cast<struct sockaddr*>(&server_addr), &server_addr_size);
-	const auto server_ip = ntohl(server_addr.sin_addr.s_addr);
 
-	if (nbytes < pkt_buffer.size())
+	if (nbytes < static_cast<int>(pkt_buffer.size()))
 	{
 		std::cerr << "Failed to recv frame packet!\n";
 		return -1;
 	}
 
+	const auto server_ip = ntohl(server_addr.sin_addr.s_addr);
 	return server_id_map.at(server_ip);
 }
 
 auto stream_t::recv_thread_task() -> void
 {
-	// TODO: Handle graceful exit
-	for (;;)
+	while (is_running.test())
 	{
 		const auto stream_id = recv_pkt();
 		if (drop_incoming_pkts.test() || stream_id < 0) continue;
@@ -249,7 +251,7 @@ auto stream_t::recv_thread_task() -> void
 			// Decode slice once all packets have been received
 			const auto slice_offset = slice_id * slice_buffer_size;
 			auto in_buffer = enc_buffer[stream_id].data() + slice_offset;
-			auto slice_buffer = (*frame_buffers)[stream_id].data() + slice_offset;
+			auto slice_buffer = (*out_buffers)[stream_id].data() + slice_offset;
 			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, slice_buffer);
 		}
 
@@ -275,7 +277,7 @@ auto stream_t::recv_thread_task() -> void
 			for (auto i = 0; i < config::num_slices; i++)
 			{
 				const auto slice_offset = i * slice_buffer_size;
-				auto slice_buffer = (*frame_buffers)[server_id].data() + slice_offset;
+				auto slice_buffer = (*out_buffers)[server_id].data() + slice_offset;
 
 				const auto num_enc_bytes = codec::encode_slice(slice_buffer, enc_buffer, W, H);
 				const auto cr = (float)num_enc_bytes / slice_buffer_size;
