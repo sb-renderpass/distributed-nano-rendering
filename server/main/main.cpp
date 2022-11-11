@@ -26,6 +26,7 @@
 
 #include "raycaster.hpp"
 #include "types.hpp"
+#include "common/protocol.hpp"
 
 #define PORT CONFIG_EXAMPLE_PORT
 
@@ -92,31 +93,6 @@ auto render_task(void* params) -> void
 
     vTaskDelete(nullptr);
 }
-
-inline auto write_pkt_info(
-	int slice_end,
-	int slice_id,
-	int pkt_id,
-	uint8_t* buffer) -> uint8_t*
-{
-	*buffer++ = ((slice_end & 1) << 7) | (slice_id & 0x0F);
-	*buffer++ = (pkt_id & 0xFF);
-	return buffer;
-}
-
-inline auto write_pkt_payload(const uint8_t* payload, int size, uint8_t* buffer) -> uint8_t*
-{
-	std::memcpy(buffer, payload, size);
-	return buffer + size;
-}
-
-/*
-inline auto write_slice_info(uint8_t num_pkts_in_slice, uint8_t* buffer) -> uint8_t*
-{
-	*buffer++ = num_pkts_in_slice;
-	return buffer;
-}
-*/
 
 auto stream_task(void* params) -> void
 {
@@ -211,19 +187,19 @@ auto stream_task(void* params) -> void
 
                     stream_elapsed -= esp_timer_get_time();
 
-                    auto pkt_id = 0;
                     auto slice_ptr = slice[index].buffer;
                     const auto slice_end = slice[index].buffer + slice[index].size;
-                    while (slice_ptr < slice_end)
+
+                    for (auto pkt_id = 0; slice_ptr < slice_end; pkt_id++)
                     {
-                        constexpr auto max_pkt_payload_size = pkt_buffer_size - sizeof(pkt_info_t);
+                        constexpr auto max_pkt_payload_size = pkt_buffer_size - sizeof(protocol::pkt_info_t);
                         const auto rem_size = slice_end - slice_ptr;
                         const auto is_slice_end = rem_size <= max_pkt_payload_size;
                         const auto payload_size = is_slice_end ? rem_size : max_pkt_payload_size;
 
 						auto pkt_ptr = pkt_buffer;
-                        pkt_ptr = write_pkt_info(is_slice_end, slice_id, pkt_id, pkt_ptr);
-						pkt_ptr = write_pkt_payload(slice_ptr, payload_size, pkt_ptr);
+                        pkt_ptr = protocol::write_pkt_info(is_slice_end, slice_id, pkt_id, pkt_ptr);
+						pkt_ptr = protocol::write_payload(slice_ptr, payload_size, pkt_ptr);
 
                         /*
 						const auto is_frame_end_pkt = is_frame_end && is_slice_end;
@@ -245,7 +221,6 @@ auto stream_task(void* params) -> void
 							pkt_buffer, pkt_buffer_size, 0,
 							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
 
-                        pkt_id++;
                         slice_ptr += payload_size;
                     }
 

@@ -24,6 +24,7 @@
 #include "config.hpp"
 #include "types.hpp"
 #include "common/codec.hpp"
+#include "common/protocol.hpp"
 
 constexpr auto frame_buffer_width  = config::width;
 constexpr auto frame_buffer_height = config::height;
@@ -39,22 +40,6 @@ auto get_timestamp_ns() -> uint64_t
 	return std::chrono::duration_cast<std::chrono::nanoseconds>(
 		std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
-
-auto unpack_pkt_info(const uint8_t* buffer) -> std::tuple<int, int, int>
-{
-	const auto slice_end = (buffer[0] >> 7) & 1;
-	const auto slice_id  = (buffer[0] & 0x0F);
-	const auto pkt_id    = (buffer[1] & 0xFF);
-	return {slice_end, slice_id, pkt_id};
-}
-
-/*
-auto unpack_slice_info(const uint8_t* buffer) -> slice_info_t
-{
-	const auto num_pkts = buffer[0];
-	return {num_pkts};
-}
-*/
 
 auto unpack_frame_info(const uint8_t* buffer, int offset) -> frame_info_t
 {
@@ -229,37 +214,41 @@ auto stream_t::recv_thread_task() -> void
 		const auto stream_id = recv_pkt();
 		if (drop_incoming_pkts.test() || stream_id < 0) continue;
 
-		const auto [slice_end, slice_id, pkt_id] = unpack_pkt_info(pkt_buffer.data());
+		//const auto [slice_end, slice_id, pkt_id] = unpack_pkt_info(pkt_buffer.data());
 		//std::clog << slice_end << ' ' << slice_id << ' ' << pkt_id << '\n';
 
-		constexpr auto max_pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info_t);
+		auto pkt_ptr = pkt_buffer.data();
+
+		protocol::pkt_info_t pkt_info;
+		pkt_ptr = protocol::read(pkt_ptr, pkt_info);
+
+		// Determine precise location in buffer to store packet
+		constexpr auto max_pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info);
 		const auto stream_offset = stream_id * frame_buffer_size;
-		const auto slice_offset  = slice_id  * slice_buffer_size;
-		const auto pkt_offset    = pkt_id    * max_pkt_payload_size;
-		std::memcpy(
-			enc_buffer.data() + stream_offset + slice_offset + pkt_offset,
-			pkt_buffer.data() + sizeof(pkt_info_t),
-			max_pkt_payload_size);
+		const auto slice_offset  = pkt_info.slice_id * slice_buffer_size;
+		const auto pkt_offset    = pkt_info.pkt_id   * max_pkt_payload_size;
+		const auto enc_ptr       = enc_buffer.data() + stream_offset + slice_offset + pkt_offset;
+		pkt_ptr = protocol::read_payload(pkt_ptr, max_pkt_payload_size, enc_ptr);
 
 		// Mark packet received for a slice
-		pkt_bitmasks[stream_id][slice_id] |= (1U << pkt_id);
+		pkt_bitmasks[stream_id][pkt_info.slice_id] |= (1U << pkt_info.pkt_id);
 
 		// Mark slice complete if all of its packets have been received
-		const auto all_slice_pkts_bitmask = (1U << (pkt_id + 1)) - 1U;
-		const auto all_slice_pkts_recvd   = pkt_bitmasks[stream_id][slice_id] == all_slice_pkts_bitmask;
-		if (slice_end && all_slice_pkts_recvd)
+		const auto all_slice_pkts_bitmask = (1U << (pkt_info.pkt_id + 1)) - 1U;
+		const auto all_slice_pkts_recvd   = pkt_bitmasks[stream_id][pkt_info.slice_id] == all_slice_pkts_bitmask;
+		if (pkt_info.slice_end && all_slice_pkts_recvd)
 		{
-			result.stats[stream_id].slice_bitmask |= (1U << slice_id);
+			result.stats[stream_id].slice_bitmask |= (1U << pkt_info.slice_id);
 
 			// Decode slice once all packets have been received
-			auto in_buffer  = enc_buffer.data() + stream_offset + slice_offset;
-			auto out_buffer = screen_buffer     + stream_offset + slice_offset;
-			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, out_buffer);
+			auto enc_ptr = enc_buffer.data() + stream_offset + slice_offset;
+			auto out_ptr = screen_buffer     + stream_offset + slice_offset;
+			result.stats[stream_id].num_enc_bytes += codec::decode_slice(enc_ptr, out_ptr);
 		}
 
 		// Unpack frame stats from the last packet of the frame
-		const auto frame_end = slice_id == config::num_slices - 1;
-		const auto is_frame_end_pkt = frame_end && slice_end;
+		const auto frame_end = pkt_info.slice_id == config::num_slices - 1;
+		const auto is_frame_end_pkt = frame_end && pkt_info.slice_end;
 		if (is_frame_end_pkt)
 		{
 			const auto frame_info = unpack_frame_info(pkt_buffer.data(), config::pkt_buffer_size);

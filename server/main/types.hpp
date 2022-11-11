@@ -26,23 +26,6 @@ struct render_command_t
     tile_t tile;
 };
 
-struct pkt_info_t
-{
-	uint8_t slice_end : 1 {0};
-	uint8_t reserved  : 3 {0};
-	uint8_t slice_id  : 4 {0}; // max 16 slices per frame
-	uint8_t pkt_id        {0}; // max 256 packets per slice
-};
-
-/*
-struct frame_info_t
-{
-	uint32_t render_time_us {0};
-	uint32_t stream_time_us {0};
-	uint64_t timestamp      {0};
-} __attribute__((__packed__));
-*/
-
 struct encoded_slice_t
 {
     int width  {0};
