@@ -1,75 +1,24 @@
 #pragma once
 
-#include <algorithm>
-#include <iostream>
-#include <array>
-
-#include "bitstream.hpp"
+#include <cstdint>
 
 namespace codec
 {
 
 constexpr auto stream_end_symbol = 0xFF;
 
-using pixel_t = std::array<uint8_t, 3>;
-
-__attribute__((always_inline))
-inline auto split_rgb233(uint8_t x) -> pixel_t
-{
-	return
-	{
-		static_cast<uint8_t>((x >> 6) & 0b011),
-		static_cast<uint8_t>((x >> 3) & 0b111),
-		static_cast<uint8_t>((x >> 0) & 0b111),
-	};
-}
-
-__attribute__((always_inline))
-inline auto join_rgb233(const pixel_t& x) -> uint8_t
-{
-	return
-		((x[0] & 0b011) << 6) |
-		((x[1] & 0b111) << 3) |
-		((x[2] & 0b111) << 0);
-}
-
-__attribute__((always_inline))
-inline auto zigzag_encode(int x)
-{
-	return (x >> 31) ^ (x << 1);
-}
-
-__attribute__((always_inline))
-inline auto zigzag_decode(int x)
-{
-	return (x >> 1) ^ -(x & 1);
-}
-
-__attribute__((always_inline))
-inline auto predict(int a, int b, int c) -> int
-{
-	const auto [min_a_b, max_a_b] = std::minmax(a, b);
-	if (c >= max_a_b) return min_a_b;
-	else if (c <= min_a_b) return max_a_b;
-	return a + b - c;
-}
-
-__attribute__((always_inline))
-inline auto encode(uint8_t r, uint8_t g, uint8_t b, uint8_t x) -> int
-{
-	return zigzag_encode(x - predict(r, g, b)) + 1;
-}
-
-auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H) -> int
+auto encode_slice(const uint8_t* in_buffer, uint8_t* enc_buffer, int width, int height) -> int
 {
 	auto dst_ptr = enc_buffer;
-	for (auto i = 0; i < H; i++)
+	for (auto i = 0; i < height; i++)
 	{
+		// Reset RLE for every row
 		auto run_val = 0;
 		auto run_len = 0;
-		for (auto j = 0; j < W; j++)
+
+		for (auto j = 0; j < width; j++)
 		{
-			const auto value = *slice_buffer++;
+			const auto value = *in_buffer++;
 			if (run_len == 0)
 			{
 				run_val = value;
@@ -91,6 +40,7 @@ auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H
 		*dst_ptr++ = run_val;
 		*dst_ptr++ = run_len;
 	}
+
 	// Terminate stream with special symbol
 	*dst_ptr++ = stream_end_symbol;
 	*dst_ptr++ = stream_end_symbol;
@@ -109,7 +59,7 @@ auto decode_slice(const uint8_t* enc_buffer, uint8_t* out_buffer) -> int
 		if (run_val == stream_end_symbol && run_len == stream_end_symbol) break;
 		for (auto i = 0; i < run_len; i++) *dst_ptr++ = run_val;
 	}
-	const auto t = dst_ptr - out_buffer; if (t != 19200) std::clog << t << '\n';
+	//const auto t = dst_ptr - out_buffer; if (t != 19200) std::clog << t << '\n';
 	return src_ptr - enc_buffer;
 }
 
