@@ -34,7 +34,7 @@ static const char *TAG = "server";
 namespace
 {
 
-constexpr auto frame_buffer_width  = 320 / 2;
+constexpr auto frame_buffer_width  = 320;
 constexpr auto frame_buffer_height = 240;
 constexpr auto pkt_buffer_size     = 1440;
 constexpr auto num_slices          = 4;
@@ -211,8 +211,8 @@ auto stream_task(void* params) -> void
                     stream_elapsed -= esp_timer_get_time();
 
 					const auto encoded_slice_size = slice[index].size;
-					const auto num_pkts_in_slice = static_cast<int>(std::ceil(static_cast<float>(encoded_slice_size) / pkt_buffer_size));
 					const auto pkt_payload_size   = pkt_buffer_size - sizeof(pkt_info_t);
+					const auto num_pkts_in_slice = static_cast<int>(std::ceil(static_cast<float>(encoded_slice_size) / pkt_payload_size));
 
                     for (auto pkt_id = 0; pkt_id < num_pkts_in_slice; pkt_id++)
                     {

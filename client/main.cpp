@@ -229,10 +229,9 @@ auto main() -> int
 		.add_shader(GL_FRAGMENT_SHADER, shaders::shader_fs)
 		.build();
 
-	std::vector<std::vector<uint8_t>> frame_buffers (config::num_streams);
-	for (auto&& fb : frame_buffers) fb.resize(frame_buffer_size, 0b01001001);
-	const auto frame_buffer_texture = gl::texture_builder_t(frame_buffer_height, frame_buffer_width, config::num_streams)
-		.set_data(frame_buffers[0].data())
+	std::vector<uint8_t> screen_buffer (frame_buffer_size * config::num_streams, 0b01010010);
+	const auto screen_texture = gl::texture_builder_t(frame_buffer_height, frame_buffer_width, config::num_streams)
+		.set_data(screen_buffer.data())
 		.set_type(GL_TEXTURE_2D_ARRAY)
 		.build();
 
@@ -245,7 +244,7 @@ auto main() -> int
 	const auto stream_render_buffer = gl::create_buffer<stream_render_t>(config::num_streams);
 	gl::bind_buffer(stream_render_buffer, 0);
 
-	stream_t stream {config::servers, &frame_buffers};
+	stream_t stream {config::servers, screen_buffer.data()};
 
 	std::deque<double> frame_time_deque (10, 0);
 
@@ -295,7 +294,8 @@ auto main() -> int
 
 		for (auto i = 0; i < config::num_streams; i++)
 		{
-			gl::update_data(frame_buffer_texture, frame_buffers[i].data(), i);
+			const auto stream_offset = i * frame_buffer_size;
+			gl::update_data(screen_texture, screen_buffer.data() + stream_offset, i);
 			/*
 			if (const auto bm = result.stats[i].slice_bitmask; bm != all_slice_bitmask)
 				fmt::print("{:02b} {:016b}\n", result.stream_bitmask, bm);
@@ -313,7 +313,7 @@ auto main() -> int
 		}
 
 		glUseProgram(program.handle);
-		glBindTextureUnit(0, frame_buffer_texture.handle);
+		glBindTextureUnit(0, screen_texture.handle);
 		glBindVertexArray(vao);
 		glUniform4fv(0, 1, glm::value_ptr(slice_render_data));
 		glUniform4fv(1, 1, glm::value_ptr(slice_texture_data));
@@ -333,7 +333,7 @@ auto main() -> int
 
 	gl::delete_buffer(stream_render_buffer);
 	gl::delete_buffer(index_buffer);
-	gl::delete_texture(frame_buffer_texture);
+	gl::delete_texture(screen_texture);
 	gl::delete_program(program);
 
 	glfwDestroyWindow(window);

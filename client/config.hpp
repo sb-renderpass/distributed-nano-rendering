@@ -13,11 +13,11 @@ namespace config
 {
 
 constexpr auto name				= "ESP32 Remote Render";
-constexpr auto width			= 320 / 2;
+constexpr auto width			= 320;
 constexpr auto height			= 240;
 constexpr auto fov				= 60;
 constexpr auto target_fps		= 30;
-constexpr auto render_scale_w	= 4;
+constexpr auto render_scale_w	= 2;
 constexpr auto render_scale_h	= 2;
 
 constexpr auto pkt_buffer_size	= 1440;

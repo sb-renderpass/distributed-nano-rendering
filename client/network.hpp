@@ -71,15 +71,13 @@ public:
 
 	~stream_t();
 
-	stream_t(
-		const std::vector<server_t>& server_addr,
-		std::vector<std::vector<uint8_t>>* out_buffers);
+	stream_t(const std::vector<server_t>& server_addr, uint8_t* screen_buffer);
 
 	auto start(const std::vector<render_command_t>& cmds) -> std::future<void>;
 	auto stop() -> result_t;
  
 private:
-	std::vector<std::vector<uint8_t>>* out_buffers;
+	uint8_t* screen_buffer {nullptr};
 	std::array<std::array<uint32_t, config::num_slices>, config::num_streams> pkt_bitmasks;
 
 	int sock {};
@@ -89,8 +87,8 @@ private:
 	std::atomic_flag drop_incoming_pkts;
 	std::atomic_flag is_running; // TODO: Use std::stop_token
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
-	std::array<std::array<uint8_t, frame_buffer_size>, config::num_streams> enc_buffer;
 	std::unordered_map<uint32_t, int> server_id_map;
+	std::vector<uint8_t> enc_buffer;
 	result_t result {};
 	uint32_t active_stream_bitmask {};
 	std::promise<void> ready_promise;
@@ -107,11 +105,11 @@ stream_t::~stream_t()
 	close(sock);
 }
 
-stream_t::stream_t(
-	const std::vector<server_t>& servers,
-	std::vector<std::vector<uint8_t>>* out_buffers)
-	: out_buffers {out_buffers}
+stream_t::stream_t(const std::vector<server_t>& servers, uint8_t* screen_buffer)
+	: screen_buffer {screen_buffer}
 {
+	enc_buffer.resize(frame_buffer_size * config::num_streams);
+
 	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
 
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -235,8 +233,13 @@ auto stream_t::recv_thread_task() -> void
 		//std::clog << frame_end << ' ' << slice_end << ' ' << slice_id << ' ' << pkt_id << '\n';
 
 		constexpr auto pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info_t);
-		const auto pkt_offset = slice_id * slice_buffer_size + pkt_id * config::pkt_buffer_size;
-		std::copy_n(pkt_buffer.data() + sizeof(pkt_info_t), pkt_payload_size, enc_buffer[stream_id].data() + pkt_offset);
+		const auto stream_offset = stream_id * frame_buffer_size;
+		const auto slice_offset  = slice_id  * slice_buffer_size;
+		const auto pkt_offset    = pkt_id    * pkt_payload_size;
+		std::memcpy(
+			enc_buffer.data() + stream_offset + slice_offset + pkt_offset,
+			pkt_buffer.data() + sizeof(pkt_info_t),
+			pkt_payload_size);
 
 		// Mark packet received for a slice
 		pkt_bitmasks[stream_id][slice_id] |= (1U << pkt_id);
@@ -249,10 +252,11 @@ auto stream_t::recv_thread_task() -> void
 			result.stats[stream_id].slice_bitmask |= (1U << slice_id);
 
 			// Decode slice once all packets have been received
-			const auto slice_offset = slice_id * slice_buffer_size;
-			auto in_buffer = enc_buffer[stream_id].data() + slice_offset;
-			auto slice_buffer = (*out_buffers)[stream_id].data() + slice_offset;
-			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, slice_buffer);
+			const auto stream_offset = stream_id * frame_buffer_size;
+			const auto slice_offset  = slice_id  * slice_buffer_size;
+			auto in_buffer  = enc_buffer.data() + stream_offset + slice_offset;
+			auto out_buffer = screen_buffer     + stream_offset + slice_offset;
+			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, out_buffer);
 		}
 
 		// Unpack frame stats from the last packet of the frame
@@ -294,6 +298,6 @@ auto stream_t::recv_thread_task() -> void
 		}
 
 		// Early exit when all frames are received
-		if (active_stream_bitmask == all_stream_bitmask) ready_promise.set_value();
+		//if (active_stream_bitmask == all_stream_bitmask) ready_promise.set_value();
 	}
 }
