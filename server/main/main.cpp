@@ -94,13 +94,12 @@ auto render_task(void* params) -> void
 }
 
 inline auto write_pkt_info(
-	int frame_end,
 	int slice_end,
 	int slice_id,
 	int pkt_id,
 	uint8_t* buffer) -> uint8_t*
 {
-	*buffer++ = ((frame_end & 1) << 7) | ((slice_end & 1) << 6) | (slice_id & 0x0F);
+	*buffer++ = ((slice_end & 1) << 7) | (slice_id & 0x0F);
 	*buffer++ = (pkt_id & 0xFF);
 	return buffer;
 }
@@ -111,11 +110,13 @@ inline auto write_pkt_payload(const uint8_t* payload, int size, uint8_t* buffer)
 	return buffer + size;
 }
 
+/*
 inline auto write_slice_info(uint8_t num_pkts_in_slice, uint8_t* buffer) -> uint8_t*
 {
 	*buffer++ = num_pkts_in_slice;
 	return buffer;
 }
+*/
 
 auto stream_task(void* params) -> void
 {
@@ -210,42 +211,43 @@ auto stream_task(void* params) -> void
 
                     stream_elapsed -= esp_timer_get_time();
 
-					const auto encoded_slice_size = slice[index].size;
-					const auto pkt_payload_size   = pkt_buffer_size - sizeof(pkt_info_t);
-					const auto num_pkts_in_slice = static_cast<int>(std::ceil(static_cast<float>(encoded_slice_size) / pkt_payload_size));
-
-                    for (auto pkt_id = 0; pkt_id < num_pkts_in_slice; pkt_id++)
+                    auto pkt_id = 0;
+                    auto slice_ptr = slice[index].buffer;
+                    const auto slice_end = slice[index].buffer + slice[index].size;
+                    while (slice_ptr < slice_end)
                     {
-						auto ptr = pkt_buffer;
+                        constexpr auto max_pkt_payload_size = pkt_buffer_size - sizeof(pkt_info_t);
+                        const auto rem_size = slice_end - slice_ptr;
+                        const auto is_slice_end = rem_size <= max_pkt_payload_size;
+                        const auto payload_size = is_slice_end ? rem_size : max_pkt_payload_size;
 
-                        const auto is_frame_end = slice_id == num_slices - 1;
-                        const auto is_slice_end = pkt_id == num_pkts_in_slice - 1;
-                        ptr = write_pkt_info(is_frame_end, is_slice_end, slice_id, pkt_id, ptr);
-						ptr = write_pkt_payload(slice[index].buffer + pkt_id * pkt_payload_size, pkt_payload_size, ptr);
+						auto pkt_ptr = pkt_buffer;
+                        pkt_ptr = write_pkt_info(is_slice_end, slice_id, pkt_id, pkt_ptr);
+						pkt_ptr = write_pkt_payload(slice_ptr, payload_size, pkt_ptr);
 
-                        if (is_slice_end)
-						{
-							write_slice_info(num_pkts_in_slice, pkt_buffer + pkt_buffer_size - sizeof(slice_info_t));
-						}
-
+                        /*
 						const auto is_frame_end_pkt = is_frame_end && is_slice_end;
 						if (is_frame_end_pkt)
                         {
                             std::memcpy(
-								pkt_buffer + pkt_buffer_size - sizeof(slice_info_t) - sizeof(cmd.pose.ts) - sizeof(pipeline_stats),
+								pkt_buffer + pkt_buffer_size - sizeof(cmd.pose.ts) - sizeof(pipeline_stats),
 								&pipeline_stats,
 								sizeof(pipeline_stats));
                             std::memcpy(
-								pkt_buffer + pkt_buffer_size - sizeof(slice_info_t) - sizeof(cmd.pose.ts),
+								pkt_buffer + pkt_buffer_size - sizeof(cmd.pose.ts),
 								&cmd.pose.ts,
 								sizeof(cmd.pose.ts));
                         }
+                        */
 
                         sendto(
 							sock,
 							pkt_buffer, pkt_buffer_size, 0,
 							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
-                    } // for(pkt_id)
+
+                        pkt_id++;
+                        slice_ptr += payload_size;
+                    }
 
                     stream_elapsed += esp_timer_get_time();
                 } // for(slice_id)

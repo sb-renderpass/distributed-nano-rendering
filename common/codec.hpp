@@ -98,20 +98,18 @@ auto encode_slice(const uint8_t* slice_buffer, uint8_t* enc_buffer, int W, int H
 	return dst_ptr - enc_buffer;
 }
 
-auto decode_slice(const uint8_t* enc_buffer, uint8_t* slice_buffer, int max_size) -> int
+auto decode_slice(const uint8_t* enc_buffer, uint8_t* out_buffer) -> int
 {
 	auto src_ptr = enc_buffer;
+	auto dst_ptr = out_buffer;
 	for (;;)
 	{
 		const auto run_val = *src_ptr++;
 		const auto run_len = *src_ptr++;
 		if (run_val == stream_end_symbol && run_len == stream_end_symbol) break;
-		for (auto i = 0; i < run_len; i++)
-		{
-			if (max_size-- == 0) return src_ptr - enc_buffer; // FIXME: Hack to avoid buffer overflow
-			*slice_buffer++ = run_val;
-		}
+		for (auto i = 0; i < run_len; i++) *dst_ptr++ = run_val;
 	}
+	const auto t = dst_ptr - out_buffer; if (t != 19200) std::clog << t << '\n';
 	return src_ptr - enc_buffer;
 }
 

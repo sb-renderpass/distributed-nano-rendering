@@ -28,25 +28,20 @@ struct render_command_t
 
 struct pkt_info_t
 {
-	uint8_t frame_end : 1 {0};
 	uint8_t slice_end : 1 {0};
-	uint8_t reserved  : 2 {0};
+	uint8_t reserved  : 3 {0};
 	uint8_t slice_id  : 4 {0}; // max 16 slices per frame
 	uint8_t pkt_id        {0}; // max 256 packets per slice
 };
 
-struct slice_info_t
+/*
+struct frame_info_t
 {
-	uint8_t num_pkts {0};
-};
-
-struct pkt_header_t
-{
-	uint16_t frame_num    {0};
-	uint32_t padding :  1 {0};
-	uint32_t seqnum  :  7 {0};
-	uint32_t offset  : 24 {0};
-};
+	uint32_t render_time_us {0};
+	uint32_t stream_time_us {0};
+	uint64_t timestamp      {0};
+} __attribute__((__packed__));
+*/
 
 struct encoded_slice_t
 {

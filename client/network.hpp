@@ -40,20 +40,21 @@ auto get_timestamp_ns() -> uint64_t
 		std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 
-auto unpack_pkt_info(const uint8_t* buffer) -> std::tuple<int, int, int, int>
+auto unpack_pkt_info(const uint8_t* buffer) -> std::tuple<int, int, int>
 {
-	const auto frame_end = (buffer[0] >> 7) & 1;
-	const auto slice_end = (buffer[0] >> 6) & 1;
+	const auto slice_end = (buffer[0] >> 7) & 1;
 	const auto slice_id  = (buffer[0] & 0x0F);
 	const auto pkt_id    = (buffer[1] & 0xFF);
-	return {frame_end, slice_end, slice_id, pkt_id};
+	return {slice_end, slice_id, pkt_id};
 }
 
+/*
 auto unpack_slice_info(const uint8_t* buffer) -> slice_info_t
 {
 	const auto num_pkts = buffer[0];
 	return {num_pkts};
 }
+*/
 
 auto unpack_frame_info(const uint8_t* buffer, int offset) -> frame_info_t
 {
@@ -228,42 +229,40 @@ auto stream_t::recv_thread_task() -> void
 		const auto stream_id = recv_pkt();
 		if (drop_incoming_pkts.test() || stream_id < 0) continue;
 
-		const auto [frame_end, slice_end, slice_id, pkt_id] = unpack_pkt_info(pkt_buffer.data());
-		const auto slice_info = unpack_slice_info(pkt_buffer.data() + pkt_buffer.size() - sizeof(slice_info_t));
-		//std::clog << frame_end << ' ' << slice_end << ' ' << slice_id << ' ' << pkt_id << '\n';
+		const auto [slice_end, slice_id, pkt_id] = unpack_pkt_info(pkt_buffer.data());
+		//std::clog << slice_end << ' ' << slice_id << ' ' << pkt_id << '\n';
 
-		constexpr auto pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info_t);
+		constexpr auto max_pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info_t);
 		const auto stream_offset = stream_id * frame_buffer_size;
 		const auto slice_offset  = slice_id  * slice_buffer_size;
-		const auto pkt_offset    = pkt_id    * pkt_payload_size;
+		const auto pkt_offset    = pkt_id    * max_pkt_payload_size;
 		std::memcpy(
 			enc_buffer.data() + stream_offset + slice_offset + pkt_offset,
 			pkt_buffer.data() + sizeof(pkt_info_t),
-			pkt_payload_size);
+			max_pkt_payload_size);
 
 		// Mark packet received for a slice
 		pkt_bitmasks[stream_id][slice_id] |= (1U << pkt_id);
 
 		// Mark slice complete if all of its packets have been received
-		const auto all_slice_pkts_bitmask = (1U << slice_info.num_pkts) - 1U;
+		const auto all_slice_pkts_bitmask = (1U << (pkt_id + 1)) - 1U;
 		const auto all_slice_pkts_recvd   = pkt_bitmasks[stream_id][slice_id] == all_slice_pkts_bitmask;
 		if (slice_end && all_slice_pkts_recvd)
 		{
 			result.stats[stream_id].slice_bitmask |= (1U << slice_id);
 
 			// Decode slice once all packets have been received
-			const auto stream_offset = stream_id * frame_buffer_size;
-			const auto slice_offset  = slice_id  * slice_buffer_size;
 			auto in_buffer  = enc_buffer.data() + stream_offset + slice_offset;
 			auto out_buffer = screen_buffer     + stream_offset + slice_offset;
-			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, out_buffer, slice_buffer_size);
+			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, out_buffer);
 		}
 
 		// Unpack frame stats from the last packet of the frame
+		const auto frame_end = slice_id == config::num_slices - 1;
 		const auto is_frame_end_pkt = frame_end && slice_end;
 		if (is_frame_end_pkt)
 		{
-			const auto frame_info = unpack_frame_info(pkt_buffer.data(), pkt_buffer.size() - sizeof(slice_info_t));
+			const auto frame_info = unpack_frame_info(pkt_buffer.data(), config::pkt_buffer_size);
 			const auto pose_recv_timestamp = get_timestamp_ns();
 			const auto pose_rtt_ns = pose_recv_timestamp - frame_info.timestamp;
 
