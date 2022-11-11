@@ -88,7 +88,7 @@ private:
 	std::atomic_flag drop_incoming_pkts;
 	std::atomic_flag stats_not_ready;
 	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
-	std::array<uint8_t, frame_buffer_size>       enc_buffer;
+	std::array<std::array<uint8_t, frame_buffer_size>, config::num_streams> enc_buffer;
 	std::unordered_map<uint32_t, int> server_id_map;
 	result_t result {};
 	uint32_t active_stream_bitmask {};
@@ -234,7 +234,7 @@ auto stream_t::recv_thread_task() -> void
 
 		constexpr auto pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info_t);
 		const auto pkt_offset = slice_id * slice_buffer_size + pkt_id * config::pkt_buffer_size;
-		std::copy_n(pkt_buffer.data() + sizeof(pkt_info_t), pkt_payload_size, enc_buffer.data() + pkt_offset);
+		std::copy_n(pkt_buffer.data() + sizeof(pkt_info_t), pkt_payload_size, enc_buffer[stream_id].data() + pkt_offset);
 
 		// Mark packet received for a slice
 		pkt_bitmasks[stream_id][slice_id] |= (1U << pkt_id);
@@ -248,7 +248,7 @@ auto stream_t::recv_thread_task() -> void
 
 			// Decode slice once all packets have been received
 			const auto slice_offset = slice_id * slice_buffer_size;
-			auto in_buffer = enc_buffer.data() + slice_offset;
+			auto in_buffer = enc_buffer[stream_id].data() + slice_offset;
 			auto slice_buffer = (*frame_buffers)[stream_id].data() + slice_offset;
 			result.stats[stream_id].num_enc_bytes += codec::decode_slice(in_buffer, slice_buffer);
 		}
