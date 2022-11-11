@@ -24,26 +24,14 @@
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
 
+#include "common/config.hpp"
+#include "common/protocol.hpp"
 #include "raycaster.hpp"
 #include "types.hpp"
-#include "common/protocol.hpp"
 
 #define PORT CONFIG_EXAMPLE_PORT
 
 static const char *TAG = "server";
-
-namespace
-{
-
-constexpr auto frame_buffer_width  = 320;
-constexpr auto frame_buffer_height = 240;
-constexpr auto pkt_buffer_size     = 1440;
-constexpr auto num_slices          = 4;
-
-constexpr auto frame_buffer_size   = frame_buffer_width * frame_buffer_height;
-constexpr auto slice_buffer_size   = frame_buffer_size / num_slices;
-
-} // anonymous namespace
 
 TaskHandle_t render_task_handle {nullptr};
 TaskHandle_t stream_task_handle {nullptr};
@@ -56,7 +44,7 @@ encoded_slice_t slice[2];
 
 auto render_task(void* params) -> void
 {
-    constexpr auto slice_width = frame_buffer_width / num_slices;
+    constexpr auto slice_width = config::common::screen_width / config::common::num_slices;
 
     for (;;)
     {
@@ -66,7 +54,7 @@ auto render_task(void* params) -> void
         auto index = 0U;
         auto render_elapsed = 0U;
 
-        for (auto slice_id = 0; slice_id < num_slices; slice_id++)
+        for (auto slice_id = 0; slice_id < config::common::num_slices; slice_id++)
         {
             render_elapsed -= esp_timer_get_time();
             render_encode_slice(cmd, slice_id * slice_width, (slice_id + 1) * slice_width, slice[index]);
@@ -93,7 +81,7 @@ auto stream_task(void* params) -> void
     struct sockaddr_in6 client_addr;
     socklen_t socklen = sizeof(client_addr);
 
-    uint8_t pkt_buffer[pkt_buffer_size];
+    uint8_t pkt_buffer[config::common::pkt_buffer_size];
 
     for (;;)
     {
@@ -158,7 +146,7 @@ auto stream_task(void* params) -> void
         }
         ESP_LOGI(TAG, "Socket bound to port %d", PORT);
 
-        const auto frame_info_ptr = pkt_buffer + pkt_buffer_size - sizeof(frame_info);
+        const auto frame_info_ptr = pkt_buffer + config::common::pkt_buffer_size - sizeof(frame_info);
 
         for (;;)
         {
@@ -176,7 +164,7 @@ auto stream_task(void* params) -> void
 
                 auto stream_elapsed = 0U;
 
-                for (auto slice_id = 0; slice_id < num_slices; slice_id++)
+                for (auto slice_id = 0; slice_id < config::common::num_slices; slice_id++)
                 {
 					// Wait for render thread to signal that the rendered slice is ready for streaming
 					const auto index = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -191,7 +179,7 @@ auto stream_task(void* params) -> void
                     while (slice_ptr < slice_end)
                     {
                         // Split encoded slice buffer into as many full packets as possible
-                        constexpr auto max_pkt_payload_size = pkt_buffer_size - sizeof(protocol::pkt_info_t);
+                        constexpr auto max_pkt_payload_size = config::common::pkt_buffer_size - sizeof(protocol::pkt_info_t);
                         constexpr auto min_pkt_payload_size = max_pkt_payload_size - sizeof(protocol::frame_info_t);
                         const auto rem_size = slice_end - slice_ptr;
                         const auto payload_size = std::min<int>(rem_size, max_pkt_payload_size);
@@ -202,12 +190,12 @@ auto stream_task(void* params) -> void
 						pkt_ptr = protocol::write_payload(slice_ptr, payload_size, pkt_ptr);
 
                         // Add frame info to last packet if there is space
-                        const auto frame_end = (slice_id == (num_slices - 1));
+                        const auto frame_end = (slice_id == (config::common::num_slices - 1));
                         if (frame_end && is_slice_end) protocol::write(frame_info, frame_info_ptr);
 
                         sendto(
 							sock,
-							pkt_buffer, pkt_buffer_size, 0,
+							pkt_buffer, config::common::pkt_buffer_size, 0,
 							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
 
                         pkt_id++;
@@ -217,11 +205,11 @@ auto stream_task(void* params) -> void
                     // Send frame info as an additional packet if ther was no space in the last packet
                     if (!is_slice_end)
                     {
-                        protocol::write_pkt_info(1, 0, num_slices - 1, pkt_id, pkt_buffer);
+                        protocol::write_pkt_info(1, 0, config::common::num_slices - 1, pkt_id, pkt_buffer);
                         protocol::write(frame_info, frame_info_ptr);
                         sendto(
 							sock,
-							pkt_buffer, pkt_buffer_size, 0,
+							pkt_buffer, config::common::pkt_buffer_size, 0,
 							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
                     }
 
@@ -264,15 +252,15 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
-    slice[0].width  = frame_buffer_width;
-    slice[0].height = frame_buffer_height;
-    slice[0].buffer = reinterpret_cast<uint8_t*>(malloc(slice_buffer_size));
+    slice[0].width  = config::common::screen_width;
+    slice[0].height = config::common::screen_height;
+    slice[0].buffer = reinterpret_cast<uint8_t*>(malloc(config::common::slice_buffer_size));
 
-    slice[1].width  = frame_buffer_width;
-    slice[1].height = frame_buffer_height;
-    slice[1].buffer = reinterpret_cast<uint8_t*>(malloc(slice_buffer_size));
+    slice[1].width  = config::common::screen_width;
+    slice[1].height = config::common::screen_height;
+    slice[1].buffer = reinterpret_cast<uint8_t*>(malloc(config::common::slice_buffer_size));
 
-    init_renderer(frame_buffer_width, frame_buffer_height);
+    init_renderer(config::common::screen_width, config::common::screen_height);
 
     xTaskCreatePinnedToCore(render_task, "render_task", 4096, nullptr, 5, &render_task_handle, 1);
 
