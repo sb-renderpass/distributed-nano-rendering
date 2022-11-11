@@ -49,18 +49,10 @@ TaskHandle_t render_task_handle {nullptr};
 TaskHandle_t stream_task_handle {nullptr};
 
 render_command_t cmd;
+protocol::frame_info_t frame_info;
 
 // Double-buffered slice for simultaneous render and stream
 encoded_slice_t slice[2];
-
-struct pipeline_stats_t
-{
-    uint32_t render_elapsed {0};
-    uint32_t stream_elapsed {0};
-};
-pipeline_stats_t pipeline_stats;
-
-//light_t light {22.0F, 11.5F, -1.0F, 0.0F};
 
 auto render_task(void* params) -> void
 {
@@ -88,7 +80,7 @@ auto render_task(void* params) -> void
 			index = !index;
         }
 
-        pipeline_stats.render_elapsed = render_elapsed;
+        frame_info.render_time_us = render_elapsed;
     }
 
     vTaskDelete(nullptr);
@@ -166,12 +158,16 @@ auto stream_task(void* params) -> void
         }
         ESP_LOGI(TAG, "Socket bound to port %d", PORT);
 
+        const auto frame_info_ptr = pkt_buffer + pkt_buffer_size - sizeof(frame_info);
+
         for (;;)
         {
             const int recv_nbytes = recvfrom(
 				sock,
 				&cmd, sizeof(cmd), 0,
 				reinterpret_cast<struct sockaddr*>(&client_addr), &socklen);
+
+            frame_info.timestamp = cmd.pose.ts;
 
             if (recv_nbytes == sizeof(cmd))
             {
@@ -190,44 +186,49 @@ auto stream_task(void* params) -> void
                     auto slice_ptr = slice[index].buffer;
                     const auto slice_end = slice[index].buffer + slice[index].size;
 
-                    for (auto pkt_id = 0; slice_ptr < slice_end; pkt_id++)
+                    auto pkt_id = 0;
+                    auto is_slice_end = false;
+                    while (slice_ptr < slice_end)
                     {
+                        // Split encoded slice buffer into as many full packets as possible
                         constexpr auto max_pkt_payload_size = pkt_buffer_size - sizeof(protocol::pkt_info_t);
+                        constexpr auto min_pkt_payload_size = max_pkt_payload_size - sizeof(protocol::frame_info_t);
                         const auto rem_size = slice_end - slice_ptr;
-                        const auto is_slice_end = rem_size <= max_pkt_payload_size;
-                        const auto payload_size = is_slice_end ? rem_size : max_pkt_payload_size;
+                        const auto payload_size = std::min<int>(rem_size, max_pkt_payload_size);
+                        is_slice_end = rem_size <= min_pkt_payload_size;
 
 						auto pkt_ptr = pkt_buffer;
-                        pkt_ptr = protocol::write_pkt_info(is_slice_end, slice_id, pkt_id, pkt_ptr);
+                        pkt_ptr = protocol::write_pkt_info(is_slice_end, 1, slice_id, pkt_id, pkt_ptr);
 						pkt_ptr = protocol::write_payload(slice_ptr, payload_size, pkt_ptr);
 
-                        /*
-						const auto is_frame_end_pkt = is_frame_end && is_slice_end;
-						if (is_frame_end_pkt)
-                        {
-                            std::memcpy(
-								pkt_buffer + pkt_buffer_size - sizeof(cmd.pose.ts) - sizeof(pipeline_stats),
-								&pipeline_stats,
-								sizeof(pipeline_stats));
-                            std::memcpy(
-								pkt_buffer + pkt_buffer_size - sizeof(cmd.pose.ts),
-								&cmd.pose.ts,
-								sizeof(cmd.pose.ts));
-                        }
-                        */
+                        // Add frame info to last packet if there is space
+                        const auto frame_end = (slice_id == (num_slices - 1));
+                        if (frame_end && is_slice_end) protocol::write(frame_info, frame_info_ptr);
 
                         sendto(
 							sock,
 							pkt_buffer, pkt_buffer_size, 0,
 							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
 
+                        pkt_id++;
                         slice_ptr += payload_size;
+                    }
+
+                    // Send frame info as an additional packet if ther was no space in the last packet
+                    if (!is_slice_end)
+                    {
+                        protocol::write_pkt_info(1, 0, num_slices - 1, pkt_id, pkt_buffer);
+                        protocol::write(frame_info, frame_info_ptr);
+                        sendto(
+							sock,
+							pkt_buffer, pkt_buffer_size, 0,
+							reinterpret_cast<sockaddr *>(&client_addr), sizeof(client_addr));
                     }
 
                     stream_elapsed += esp_timer_get_time();
                 } // for(slice_id)
 
-                pipeline_stats.stream_elapsed = stream_elapsed;
+                frame_info.stream_time_us = stream_elapsed;
             }
             else
             {

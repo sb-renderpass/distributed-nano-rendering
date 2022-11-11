@@ -41,11 +41,6 @@ auto get_timestamp_ns() -> uint64_t
 		std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 
-auto unpack_frame_info(const uint8_t* buffer, int offset) -> frame_info_t
-{
-	return *reinterpret_cast<const frame_info_t*>(buffer + offset - sizeof(frame_info_t));
-}
-
 class stream_t
 {
 public:
@@ -214,21 +209,20 @@ auto stream_t::recv_thread_task() -> void
 		const auto stream_id = recv_pkt();
 		if (drop_incoming_pkts.test() || stream_id < 0) continue;
 
-		//const auto [slice_end, slice_id, pkt_id] = unpack_pkt_info(pkt_buffer.data());
-		//std::clog << slice_end << ' ' << slice_id << ' ' << pkt_id << '\n';
-
 		auto pkt_ptr = pkt_buffer.data();
 
 		protocol::pkt_info_t pkt_info;
 		pkt_ptr = protocol::read(pkt_ptr, pkt_info);
+		//std::clog << pkt_info << '\n';
 
 		// Determine precise location in buffer to store packet
+		// Ignore packets with no encoded data
 		constexpr auto max_pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info);
 		const auto stream_offset = stream_id * frame_buffer_size;
 		const auto slice_offset  = pkt_info.slice_id * slice_buffer_size;
 		const auto pkt_offset    = pkt_info.pkt_id   * max_pkt_payload_size;
 		const auto enc_ptr       = enc_buffer.data() + stream_offset + slice_offset + pkt_offset;
-		pkt_ptr = protocol::read_payload(pkt_ptr, max_pkt_payload_size, enc_ptr);
+		if (pkt_info.has_data) protocol::read_payload(pkt_ptr, max_pkt_payload_size, enc_ptr);
 
 		// Mark packet received for a slice
 		pkt_bitmasks[stream_id][pkt_info.slice_id] |= (1U << pkt_info.pkt_id);
@@ -251,7 +245,9 @@ auto stream_t::recv_thread_task() -> void
 		const auto is_frame_end_pkt = frame_end && pkt_info.slice_end;
 		if (is_frame_end_pkt)
 		{
-			const auto frame_info = unpack_frame_info(pkt_buffer.data(), config::pkt_buffer_size);
+			protocol::frame_info_t frame_info;
+			protocol::read(pkt_buffer.data() + config::pkt_buffer_size - sizeof(frame_info), frame_info);
+
 			const auto pose_recv_timestamp = get_timestamp_ns();
 			const auto pose_rtt_ns = pose_recv_timestamp - frame_info.timestamp;
 
