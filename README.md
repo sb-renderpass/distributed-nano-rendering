@@ -39,3 +39,22 @@ $ cd client
 $ cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcpkg.cmake
 $ cmake --build build
 ```
+
+## Usage
+
+Configuration:  
+Some basic configurarion parameters in [config.hpp](common/config.hpp)
+
+Server:  
+- Power ESP32 dev boards and connect to Wi-Fi hotspot
+- Servers auto-start and attempt auto-reconnection during disconnects
+
+Client:  
+- Setup Wi-Fi hotspot on PC
+- Launch client application
+
+```
+$ cd client\build
+$ ./client
+```
+
