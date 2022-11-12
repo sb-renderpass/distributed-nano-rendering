@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 constexpr auto make_addr(int a, int b, int c, int d) -> uint32_t
 {
 	return (a << 24) | (b << 16) | (c << 8) | d;

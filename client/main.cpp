@@ -164,7 +164,7 @@ auto log_result(float frame_time, const stream_t::result_t& r) -> void
 			if (r.stream_bitmask & (1 << i)) // Only log data for completed streams
 			{
 				fmt::print(
-					"{:1d}) RTT {:4.1f} | Render {:4.1f} | Stream {:4.1f} | CR {:4.2f}\n",
+					"{:1d}) RTT {:5.1f} | Render {:4.1f} | Stream {:4.1f} | CR {:4.2f}\n",
 					i,
 					r.stats[i].pose_rtt_ns * 1e-6,
 					r.stats[i].render_time_us * 1e-3,
