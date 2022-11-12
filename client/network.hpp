@@ -3,8 +3,8 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstring> // memset
-#include <future>
 #include <iostream>
 #include <pthread.h>
 #include <thread>
@@ -44,35 +44,45 @@ public:
 
 	stream_t(const server_info_t* server_infos, uint8_t* screen_buffer);
 
-	auto start(const std::vector<render_command_t>& cmds) -> std::future<void>;
-	auto stop() -> result_t;
- 
+	auto send(const std::vector<render_command_t>& cmds) -> void;
+	auto recv() -> result_t;
+
+	template <typename T>
+	auto recv(const std::chrono::time_point<T>& timeout) -> result_t;
+
 private:
+	result_t result {};
 	uint8_t* screen_buffer {nullptr};
+	std::vector<uint8_t> enc_buffer;
+	std::thread pkt_recv_worker;
+
+	// Networking data
+	int sock {};
+	sockaddr_in client_addr;
+	std::vector<sockaddr_in> server_addrs;
+	std::unordered_map<uint32_t, int> server_id_map;
+
+	// System state
+	uint32_t active_stream_bitmask {};
+	std::atomic_flag drop_incoming_pkts;
+	std::atomic_flag is_running; // TODO: Use std::recv_token
+	std::array<uint8_t, config::common::pkt_buffer_size> pkt_buffer;
 	std::array<std::array<uint32_t, config::common::num_slices>, config::client::num_streams> pkt_bitmasks;
 
-	int sock {};
-	std::vector<sockaddr_in> server_addrs;
-	sockaddr_in client_addr;
-	std::thread recv_thread;
-	std::atomic_flag drop_incoming_pkts;
-	std::atomic_flag is_running; // TODO: Use std::stop_token
-	std::array<uint8_t, config::common::pkt_buffer_size> pkt_buffer;
-	std::unordered_map<uint32_t, int> server_id_map;
-	std::vector<uint8_t> enc_buffer;
-	result_t result {};
-	uint32_t active_stream_bitmask {};
-	std::promise<void> ready_promise;
+	// For signal early exit
+	bool all_stream_ready {false};
+	std::mutex all_stream_ready_mutex;
+	std::condition_variable all_stream_ready_cv;
 
 	auto send_render_command(const render_command_t& cmd, int server_id) -> int;
-	auto recv_pkt() -> int;
-	auto recv_thread_task() -> void;
+	auto recv_packet() -> int;
+	auto pkt_recv_worker_task() -> void;
 };
 
 stream_t::~stream_t()
 {
 	is_running.clear();
-	recv_thread.join();
+	pkt_recv_worker.join();
 	close(sock);
 }
 
@@ -128,31 +138,33 @@ stream_t::stream_t(const server_info_t* server_infos, uint8_t* screen_buffer)
 	cpu_set_t cpu_set;
 	CPU_ZERO(&cpu_set);
 	CPU_SET(1, &cpu_set);
-	recv_thread = std::thread {[this](){ recv_thread_task(); }};
-	if (pthread_setaffinity_np(recv_thread.native_handle(), sizeof(cpu_set), &cpu_set) != 0)
+	pkt_recv_worker = std::thread {[this](){ pkt_recv_worker_task(); }};
+	if (pthread_setaffinity_np(pkt_recv_worker.native_handle(), sizeof(cpu_set), &cpu_set) != 0)
 	{
 		std::cerr << "Failed to set recv-thread affinity!\n";
 	}
 }
 
-auto stream_t::start(const std::vector<render_command_t>& cmds) -> std::future<void>
+auto stream_t::send(const std::vector<render_command_t>& cmds) -> void
 {
 	// Reset system state
 	active_stream_bitmask = 0;
 	result.stream_bitmask = config::client::all_stream_bitmask;
 	for (auto&& x : result.stats) x.slice_bitmask = 0;
 	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
+	{
+		std::lock_guard lock {all_stream_ready_mutex};
+		all_stream_ready = false;
+	}
 
-	// Re-enable packet reception and send pose to servers to start frame render
+	// Re-enable packet reception and send pose to servers to start render
 	drop_incoming_pkts.clear();
 	for (auto i = 0; i < cmds.size(); i++) send_render_command(cmds[i], i);
-
-	ready_promise = {};
-	return ready_promise.get_future();
 }
 
-auto stream_t::stop() -> result_t
+auto stream_t::recv() -> result_t
 {
+	// Halt processing incoming packets
 	drop_incoming_pkts.test_and_set();
 
 	// Mark missing streams
@@ -164,6 +176,14 @@ auto stream_t::stop() -> result_t
 	return std::exchange(result, {});
 }
 
+template <typename T>
+auto stream_t::recv(const std::chrono::time_point<T>& timeout) -> result_t
+{
+	std::unique_lock lock {all_stream_ready_mutex};
+	all_stream_ready_cv.wait_until(lock, timeout, [this](){ return all_stream_ready; });
+	return recv();
+}
+
 auto stream_t::send_render_command(const render_command_t& cmd, int server_id) -> int
 {
 	const auto nbytes = sendto(sock, &cmd, sizeof(cmd), 0,
@@ -172,7 +192,7 @@ auto stream_t::send_render_command(const render_command_t& cmd, int server_id) -
 	return nbytes;
 }
 
-auto stream_t::recv_pkt() -> int
+auto stream_t::recv_packet() -> int
 {
 	struct sockaddr_in server_addr;
 	socklen_t server_addr_size = sizeof(server_addr);
@@ -192,11 +212,11 @@ auto stream_t::recv_pkt() -> int
 	return server_id_map.at(server_ip);
 }
 
-auto stream_t::recv_thread_task() -> void
+auto stream_t::pkt_recv_worker_task() -> void
 {
 	while (is_running.test())
 	{
-		const auto stream_id = recv_pkt();
+		const auto stream_id = recv_packet();
 		if (drop_incoming_pkts.test() || stream_id < 0) continue;
 
 		auto pkt_ptr = pkt_buffer.data();
@@ -246,32 +266,16 @@ auto stream_t::recv_thread_task() -> void
 			result.stats[stream_id].stream_time_us = frame_info.stream_time_us;
 
 			active_stream_bitmask |= (1U << stream_id);
-
-			// Encode-Decode Test
-			/*
-			constexpr auto W = config::client::height;
-			constexpr auto H = config::client::width / config::common::num_slices;
-			auto num_total_bytes = 0;
-			for (auto i = 0; i < config::common::num_slices; i++)
-			{
-				const auto slice_offset = i * config::common::slice_buffer_size;
-				auto slice_buffer = (*out_buffers)[server_id].data() + slice_offset;
-
-				const auto num_enc_bytes = codec::encode_slice(slice_buffer, enc_buffer, W, H);
-				const auto cr = (float)num_enc_bytes / config::common::slice_buffer_size;
-				std::clog << i << ' ' << cr << '\n';
-
-				codec::decode_slice(enc_buffer, slice_buffer);
-
-				num_total_bytes += num_enc_bytes;
-			}
-			const auto cr = (float)num_total_bytes / config::common::screen_buffer_size;
-			std::clog << "= " << cr << '\n';
-			std::clog << "----------\n";
-			*/
 		}
 
-		// Early exit when all frames are received
-		//if (active_stream_bitmask == all_stream_bitmask) ready_promise.set_value();
+		// Early exit when all streams are received
+		if (active_stream_bitmask == config::client::all_stream_bitmask)
+		{
+			{
+				std::lock_guard lock {all_stream_ready_mutex};
+				all_stream_ready = true;
+			}
+			all_stream_ready_cv.notify_one();
+		}
 	}
 }

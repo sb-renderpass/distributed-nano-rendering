@@ -280,7 +280,7 @@ auto main() -> int
 		pose.frame_num = frame_num++;
 		const auto cmds = create_render_commands(pose, prev_stream_bitmask);
 
-		auto ready_future = stream.start(cmds);
+		stream.send(cmds);
 
 		const auto num_active_streams = std::popcount(prev_stream_bitmask);
 		const auto stream_render_data = create_stream_render_data(prev_stream_bitmask, prev_slice_bitmasks);
@@ -292,8 +292,7 @@ auto main() -> int
 		glfwSetWindowTitle(window, title.data());
 
 		//std::this_thread::sleep_until(timeout);
-		ready_future.wait_until(timeout);
-		const auto result = stream.stop();
+		const auto result = stream.recv(timeout);
 
 		for (auto i = 0; i < config::client::num_streams; i++)
 		{
