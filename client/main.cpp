@@ -15,8 +15,8 @@
 #include <fmt/core.h>
 #include <fmt/color.h>
 
+#include "common/config.hpp"
 #include "gl.hpp"
-#include "config.hpp"
 #include "shaders.hpp"
 #include "types.hpp"
 #include "network.hpp"
@@ -54,19 +54,19 @@ constexpr auto create_2d_rotation_matrix(float angle) -> glm::mat2
 
 constexpr auto create_cam_plane(const glm::vec2& direction) -> glm::vec2
 {
-	constexpr auto fov_scale = std::tan(glm::radians(config::fov * 0.5));
+	constexpr auto fov_scale = std::tan(glm::radians(config::client::fov * 0.5));
 	return {-direction.y * fov_scale, direction.x};
 }
 
 auto update_pose(GLFWwindow* window, pose_t& pose) -> void
 {
-	constexpr auto rotate_left  = create_2d_rotation_matrix(-config::rotate_speed);
-	constexpr auto rotate_right = create_2d_rotation_matrix(+config::rotate_speed);
+	constexpr auto rotate_left  = create_2d_rotation_matrix(-config::client::rotate_speed);
+	constexpr auto rotate_right = create_2d_rotation_matrix(+config::client::rotate_speed);
 
-	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) pose.position += pose.direction * config::sprint_speed;
-	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) pose.position -= pose.direction * config::sprint_speed;
-	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) pose.position -= pose.cam_plane * config::strafe_speed;
-	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) pose.position += pose.cam_plane * config::strafe_speed;
+	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) pose.position += pose.direction * config::client::sprint_speed;
+	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) pose.position -= pose.direction * config::client::sprint_speed;
+	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) pose.position -= pose.cam_plane * config::client::strafe_speed;
+	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) pose.position += pose.cam_plane * config::client::strafe_speed;
 	if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
 	{
 		pose.direction = rotate_left * pose.direction;
@@ -83,9 +83,9 @@ auto update_pose(GLFWwindow* window, pose_t& pose) -> void
 auto create_render_commands(const pose_t& pose, uint32_t stream_bitmask) -> std::vector<render_command_t>
 {
 	const auto num_active_streams = std::popcount(stream_bitmask);
-	std::vector<render_command_t> cmds (config::num_streams);
+	std::vector<render_command_t> cmds (config::client::num_streams);
 	const auto delta_active = 2.0F / num_active_streams;
-	const auto delta_ideal  = 2.0F / config::num_streams;
+	const auto delta_ideal  = 2.0F / config::client::num_streams;
 	for (auto i = 0, count = 0; i < cmds.size(); i++)
 	{
 		if (stream_bitmask & (1U << i))
@@ -121,7 +121,7 @@ struct stream_render_t
 
 auto create_stream_render_data(
 	uint32_t stream_bitmask,
-	const std::array<uint32_t, config::num_streams>& slice_bitmasks
+	const std::array<uint32_t, config::client::num_streams>& slice_bitmasks
 ) -> std::vector<stream_render_t>
 {
 	std::vector<stream_render_t> stream_render_data;
@@ -137,13 +137,13 @@ auto create_stream_render_data(
 auto create_slice_render_data(uint32_t stream_bitmask) -> glm::vec4
 {
 	const auto num_active_streams = std::popcount(stream_bitmask);
-	const auto step = 1.0F / (num_active_streams * config::num_slices);
+	const auto step = 1.0F / (num_active_streams * config::common::num_slices);
 	return {step, 1.0F, step, 0.0F};
 }
 
 constexpr auto create_slice_texture_data() -> glm::vec4
 {
-	constexpr auto step = 1.0F / config::num_slices;
+	constexpr auto step = 1.0F / config::common::num_slices;
 	return {step, 1.0F, step, 0.0F};
 }
 
@@ -151,7 +151,7 @@ auto log_result(float frame_time, const stream_t::result_t& r) -> void
 {
 	if (r.stream_bitmask > 0)
 	{
-		constexpr auto target_frame_time = 1.0F / config::target_fps;
+		constexpr auto target_frame_time = 1.0F / config::client::target_fps;
 		const auto is_latency_high = (frame_time - target_frame_time) > 0.1F;
 
 		fmt::print(
@@ -159,7 +159,7 @@ auto log_result(float frame_time, const stream_t::result_t& r) -> void
 			" Frame {:4.1f} | Mask {:02b}\n",
 			frame_time * 1e3, r.stream_bitmask);
 
-		for (auto i = 0; i < config::num_streams; i++)
+		for (auto i = 0; i < config::client::num_streams; i++)
 		{
 			if (r.stream_bitmask & (1 << i)) // Only log data for completed streams
 			{
@@ -169,7 +169,7 @@ auto log_result(float frame_time, const stream_t::result_t& r) -> void
 					r.stats[i].pose_rtt_ns * 1e-6,
 					r.stats[i].render_time_us * 1e-3,
 					r.stats[i].stream_time_us * 1e-3,
-					r.stats[i].num_enc_bytes / static_cast<float>(frame_buffer_size)
+					r.stats[i].num_enc_bytes / static_cast<float>(config::common::screen_buffer_size)
 				);
 			}
 		}
@@ -188,7 +188,7 @@ auto main() -> int
 		std::cerr << "Failed to set recv-thread affinity!\n";
 	}
 
-	std::clog << config::name << '\n';
+	std::clog << config::client::name << '\n';
 
 	if (!glfwInit())
 	{
@@ -202,9 +202,9 @@ auto main() -> int
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT,	true);
 	glfwWindowHint(GLFW_OPENGL_PROFILE,			GLFW_OPENGL_CORE_PROFILE);
 	const auto window = glfwCreateWindow(
-		config::width  * config::render_scale_w,
-		config::height * config::render_scale_h,
-		config::name, nullptr, nullptr);
+		config::common::screen_width  * config::client::scale_width,
+		config::common::screen_height * config::client::scale_height,
+		config::client::name, nullptr, nullptr);
 	if (!window)
 	{
 		std::cerr << "Failed to create window!\n";
@@ -229,8 +229,8 @@ auto main() -> int
 		.add_shader(GL_FRAGMENT_SHADER, shaders::shader_fs)
 		.build();
 
-	std::vector<uint8_t> screen_buffer (frame_buffer_size * config::num_streams, 0b01010010);
-	const auto screen_texture = gl::texture_builder_t(frame_buffer_height, frame_buffer_width, config::num_streams)
+	std::vector<uint8_t> screen_buffer (config::common::screen_buffer_size * config::client::num_streams, 0b01010010);
+	const auto screen_texture = gl::texture_builder_t(config::common::screen_height, config::common::screen_width, config::client::num_streams)
 		.set_data(screen_buffer.data())
 		.set_type(GL_TEXTURE_2D_ARRAY)
 		.build();
@@ -241,24 +241,27 @@ auto main() -> int
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayElementBuffer(vao, index_buffer.handle);
 
-	const auto stream_render_buffer = gl::create_buffer<stream_render_t>(config::num_streams);
+	const auto stream_render_buffer = gl::create_buffer<stream_render_t>(config::client::num_streams);
 	gl::bind_buffer(stream_render_buffer, 0);
 
-	stream_t stream {config::servers, screen_buffer.data()};
+	stream_t stream {config::client::server_infos, screen_buffer.data()};
 
 	std::deque<double> frame_time_deque (10, 0);
 
 	uint16_t frame_num = 0;
 	auto pose = pose_t {0, frame_num, {22.0F, 11.05F}, {-1, 0}, {0, -1}};
 
-	uint32_t prev_stream_bitmask {all_stream_bitmask};
-	std::array<uint32_t, config::num_streams> prev_slice_bitmasks {};
-	std::fill(std::begin(prev_slice_bitmasks), std::end(prev_slice_bitmasks), all_slice_bitmask);
+	uint32_t prev_stream_bitmask {config::client::all_stream_bitmask};
+	std::array<uint32_t, config::client::num_streams> prev_slice_bitmasks {};
+	std::fill(
+		std::begin(prev_slice_bitmasks),
+		std::end(prev_slice_bitmasks),
+		config::common::all_slice_bitmask);
 
 	constexpr auto slice_texture_data = create_slice_texture_data();
 
 	const auto preferred_frame_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::duration<float>(1.0F / config::target_fps));
+		std::chrono::duration<float>(1.0F / config::client::target_fps));
 
 	auto ts_prev = glfwGetTime();
 
@@ -285,16 +288,16 @@ auto main() -> int
 			stream_render_buffer, stream_render_data.data(), stream_render_data.size());
 		const auto slice_render_data = create_slice_render_data(prev_stream_bitmask);
 
-		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::name, avg_frame_rate, num_active_streams);
+		const auto title = fmt::format("{} | {:.1f} fps | {:d} server(s)", config::client::name, avg_frame_rate, num_active_streams);
 		glfwSetWindowTitle(window, title.data());
 
 		//std::this_thread::sleep_until(timeout);
 		ready_future.wait_until(timeout);
 		const auto result = stream.stop();
 
-		for (auto i = 0; i < config::num_streams; i++)
+		for (auto i = 0; i < config::client::num_streams; i++)
 		{
-			const auto stream_offset = i * frame_buffer_size;
+			const auto stream_offset = i * config::common::screen_buffer_size;
 			gl::update_data(screen_texture, screen_buffer.data() + stream_offset, i);
 			/*
 			if (const auto bm = result.stats[i].slice_bitmask; bm != all_slice_bitmask)
@@ -317,7 +320,7 @@ auto main() -> int
 		glBindVertexArray(vao);
 		glUniform4fv(0, 1, glm::value_ptr(slice_render_data));
 		glUniform4fv(1, 1, glm::value_ptr(slice_texture_data));
-		glUniform1i(2, config::num_slices);
+		glUniform1i(2, config::common::num_slices);
 		glUniform1f(3, g_slice_overlay_alpha);
 		glUniform1f(4, g_stream_overlay_alpha);
 		glDrawElementsInstanced(
@@ -325,7 +328,7 @@ auto main() -> int
 			indices.size(),
 			GL_UNSIGNED_INT,
 			nullptr,
-			num_active_streams * config::num_slices);
+			num_active_streams * config::common::num_slices);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();

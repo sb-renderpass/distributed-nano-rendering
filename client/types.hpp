@@ -4,12 +4,6 @@
 
 #include "glm/vec2.hpp"
 
-struct server_t
-{
-	uint32_t ip   {};
-	uint32_t port {};
-};
-
 struct pose_t
 {
 	uint64_t  timestamp {0};

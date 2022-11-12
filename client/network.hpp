@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstring> // memset
 #include <future>
-#include <functional>
 #include <iostream>
 #include <pthread.h>
 #include <thread>
@@ -21,19 +20,10 @@
 #include <fmt/core.h>
 #include <fmt/color.h>
 
-#include "config.hpp"
-#include "types.hpp"
 #include "common/codec.hpp"
+#include "common/config.hpp"
 #include "common/protocol.hpp"
-
-constexpr auto frame_buffer_width  = config::width;
-constexpr auto frame_buffer_height = config::height;
-constexpr auto frame_buffer_size   = frame_buffer_width * frame_buffer_height;
-constexpr auto slice_buffer_size   = frame_buffer_size / config::num_slices;
-constexpr auto all_stream_bitmask  = (1U << config::num_streams) - 1U;
-constexpr auto all_slice_bitmask   = (1U << config::num_slices ) - 1U;
-constexpr auto target_frame_time   = 1.0F / config::target_fps;
-constexpr auto timeout_us          = static_cast<int64_t>(target_frame_time * 1e6F);
+#include "types.hpp"
 
 auto get_timestamp_ns() -> uint64_t
 {
@@ -47,19 +37,19 @@ public:
 	struct result_t
 	{
 		uint32_t stream_bitmask {};
-		std::array<stats_t, config::num_streams> stats {};
+		std::array<stats_t, config::client::num_streams> stats {};
 	};
 
 	~stream_t();
 
-	stream_t(const std::vector<server_t>& server_addr, uint8_t* screen_buffer);
+	stream_t(const server_info_t* server_infos, uint8_t* screen_buffer);
 
 	auto start(const std::vector<render_command_t>& cmds) -> std::future<void>;
 	auto stop() -> result_t;
  
 private:
 	uint8_t* screen_buffer {nullptr};
-	std::array<std::array<uint32_t, config::num_slices>, config::num_streams> pkt_bitmasks;
+	std::array<std::array<uint32_t, config::common::num_slices>, config::client::num_streams> pkt_bitmasks;
 
 	int sock {};
 	std::vector<sockaddr_in> server_addrs;
@@ -67,7 +57,7 @@ private:
 	std::thread recv_thread;
 	std::atomic_flag drop_incoming_pkts;
 	std::atomic_flag is_running; // TODO: Use std::stop_token
-	std::array<uint8_t, config::pkt_buffer_size> pkt_buffer;
+	std::array<uint8_t, config::common::pkt_buffer_size> pkt_buffer;
 	std::unordered_map<uint32_t, int> server_id_map;
 	std::vector<uint8_t> enc_buffer;
 	result_t result {};
@@ -86,10 +76,10 @@ stream_t::~stream_t()
 	close(sock);
 }
 
-stream_t::stream_t(const std::vector<server_t>& servers, uint8_t* screen_buffer)
+stream_t::stream_t(const server_info_t* server_infos, uint8_t* screen_buffer)
 	: screen_buffer {screen_buffer}
 {
-	enc_buffer.resize(frame_buffer_size * config::num_streams);
+	enc_buffer.resize(config::common::screen_buffer_size * config::client::num_streams);
 
 	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
 
@@ -105,21 +95,21 @@ stream_t::stream_t(const std::vector<server_t>& servers, uint8_t* screen_buffer)
 	constexpr auto flag = 1;
 	setsockopt(sock, SOL_SOCKET, SO_DONTROUTE, &flag, sizeof(flag));
 
-	//constexpr auto rcvbuf_size = config::pkt_buffer_size;
+	//constexpr auto rcvbuf_size = config::common::pkt_buffer_size;
 	//setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size));
 
 	//const auto value = 1;
 	//setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
 
-	for (auto i = 0; i < servers.size(); i++)
+	for (auto i = 0; i < config::client::num_streams; i++)
 	{
 		sockaddr_in server_addr;
 		std::memset(&server_addr, 0, sizeof(server_addr));
 		server_addr.sin_family      = AF_INET;
-		server_addr.sin_addr.s_addr = htonl(servers[i].ip);
-		server_addr.sin_port        = htons(servers[i].port);
+		server_addr.sin_addr.s_addr = htonl(server_infos[i].addr);
+		server_addr.sin_port        = htons(server_infos[i].port);
 		server_addrs.push_back(server_addr);
-		server_id_map.insert({servers[i].ip, i});
+		server_id_map.insert({server_infos[i].addr, i});
 	}
 
 	std::memset(&client_addr, 0, sizeof(client_addr));
@@ -149,7 +139,7 @@ auto stream_t::start(const std::vector<render_command_t>& cmds) -> std::future<v
 {
 	// Reset system state
 	active_stream_bitmask = 0;
-	result.stream_bitmask = all_stream_bitmask;
+	result.stream_bitmask = config::client::all_stream_bitmask;
 	for (auto&& x : result.stats) x.slice_bitmask = 0;
 	for (auto&& x : pkt_bitmasks) std::fill(std::begin(x), std::end(x), 0);
 
@@ -166,7 +156,7 @@ auto stream_t::stop() -> result_t
 	drop_incoming_pkts.test_and_set();
 
 	// Mark missing streams
-	for (auto i = 0; i < config::num_streams; i++)
+	for (auto i = 0; i < config::client::num_streams; i++)
 	{
 		if (result.stats[i].slice_bitmask == 0) result.stream_bitmask &= ~(1U << i);
 	}
@@ -217,9 +207,9 @@ auto stream_t::recv_thread_task() -> void
 
 		// Determine precise location in buffer to store packet
 		// Ignore packets with no encoded data
-		constexpr auto max_pkt_payload_size = config::pkt_buffer_size - sizeof(pkt_info);
-		const auto stream_offset = stream_id * frame_buffer_size;
-		const auto slice_offset  = pkt_info.slice_id * slice_buffer_size;
+		constexpr auto max_pkt_payload_size = config::common::pkt_buffer_size - sizeof(pkt_info);
+		const auto stream_offset = stream_id * config::common::screen_buffer_size;
+		const auto slice_offset  = pkt_info.slice_id * config::common::slice_buffer_size;
 		const auto pkt_offset    = pkt_info.pkt_id   * max_pkt_payload_size;
 		const auto enc_ptr       = enc_buffer.data() + stream_offset + slice_offset + pkt_offset;
 		if (pkt_info.has_data) protocol::read_payload(pkt_ptr, max_pkt_payload_size, enc_ptr);
@@ -241,12 +231,12 @@ auto stream_t::recv_thread_task() -> void
 		}
 
 		// Unpack frame stats from the last packet of the frame
-		const auto frame_end = pkt_info.slice_id == config::num_slices - 1;
+		const auto frame_end = pkt_info.slice_id == (config::common::num_slices - 1);
 		const auto is_frame_end_pkt = frame_end && pkt_info.slice_end;
 		if (is_frame_end_pkt)
 		{
 			protocol::frame_info_t frame_info;
-			protocol::read(pkt_buffer.data() + config::pkt_buffer_size - sizeof(frame_info), frame_info);
+			protocol::read(pkt_buffer.data() + config::common::pkt_buffer_size - sizeof(frame_info), frame_info);
 
 			const auto pose_recv_timestamp = get_timestamp_ns();
 			const auto pose_rtt_ns = pose_recv_timestamp - frame_info.timestamp;
@@ -259,23 +249,23 @@ auto stream_t::recv_thread_task() -> void
 
 			// Encode-Decode Test
 			/*
-			constexpr auto W = config::height;
-			constexpr auto H = config::width / config::num_slices;
+			constexpr auto W = config::client::height;
+			constexpr auto H = config::client::width / config::common::num_slices;
 			auto num_total_bytes = 0;
-			for (auto i = 0; i < config::num_slices; i++)
+			for (auto i = 0; i < config::common::num_slices; i++)
 			{
-				const auto slice_offset = i * slice_buffer_size;
+				const auto slice_offset = i * config::common::slice_buffer_size;
 				auto slice_buffer = (*out_buffers)[server_id].data() + slice_offset;
 
 				const auto num_enc_bytes = codec::encode_slice(slice_buffer, enc_buffer, W, H);
-				const auto cr = (float)num_enc_bytes / slice_buffer_size;
+				const auto cr = (float)num_enc_bytes / config::common::slice_buffer_size;
 				std::clog << i << ' ' << cr << '\n';
 
 				codec::decode_slice(enc_buffer, slice_buffer);
 
 				num_total_bytes += num_enc_bytes;
 			}
-			const auto cr = (float)num_total_bytes / frame_buffer_size;
+			const auto cr = (float)num_total_bytes / config::common::screen_buffer_size;
 			std::clog << "= " << cr << '\n';
 			std::clog << "----------\n";
 			*/
