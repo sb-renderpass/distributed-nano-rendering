@@ -1,6 +1,10 @@
 # Distributed Nano-Rendering
 Distrubuted rendering via multiple nano-rendering servers running on ESP32 dev boards.
 
+[Client view](clien_view_screenshot.png)
+
+[Real-time pipeline statistics](pipeline_stats_screenshot.png)
+
 ## Requirements
 
 Server:
@@ -10,7 +14,7 @@ Client:
 - [vcpkg](https://vcpkg.io)
 - C++20 compiler
 - OpenGL 4.5 capable GPU
-- Wi-Fi 802.11ac capable wirless
+- Wi-Fi 802.11n capable wirless
 - Wi-Fi hotspot mode
 
 ## Insall Dependencies
@@ -52,6 +56,8 @@ Server:
 Client:  
 - Setup Wi-Fi hotspot on PC
 - Launch client application
+- (Optional) Press 1 for stream overlay mode
+- (Optional) Press 2 for lost slice overlay mode
 
 ```
 $ cd client\build
