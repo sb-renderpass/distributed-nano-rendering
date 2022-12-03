@@ -1,10 +1,8 @@
 # Distributed Nano-Rendering
 Distrubuted rendering via multiple nano-rendering servers running on ESP32 dev boards.
 
-Client view
-![Client view](client_view_screenshot.png){width=75%}
+![Client view](client_view_screenshot.png | width=75%)
 
-Real-time pipeline statistics
 ![Real-time pipeline statistics](pipeline_stats_screenshot.png)
 
 ## Requirements
